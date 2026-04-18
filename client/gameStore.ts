@@ -326,6 +326,8 @@ export async function setupAsHost(peerId: string): Promise<string> {
     hostNet = new HostNetwork();
     networkMode.set('host');
     myPlayerIndex.set(0); // host is always slot 0
+    // Reset to just the host's slot; peer slots are added as peers connect.
+    lobbyState.update((s) => ({ ...s, players: [{ name: '' }] }));
 
     hostNet.onMessage = (_pid, msg) => {
       applyPeerAction(msg.payload);
