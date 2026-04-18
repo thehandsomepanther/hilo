@@ -30,8 +30,11 @@
       {#if $isDealing}<em> — dealing…</em>{/if}
     </p>
   {/if}
-  {#if $networkMode !== 'standalone'}
-    <p><em>Network mode: <strong>{$networkMode}</strong></em></p>
+  {#if $localPlayerId}
+    {@const localPlayer = $gameState?.players.find((p) => p.id === $localPlayerId)}
+    {#if localPlayer}
+      <p>Playing as: <strong>{localPlayer.name}</strong></p>
+    {/if}
   {/if}
 </header>
 
@@ -99,28 +102,6 @@
       <Results />
     {/if}
   </main>
-
-  <!-- ── Player identity selector ─────────────────────────────────────────── -->
-  {#if $gameState && phase !== 'setup'}
-    <hr />
-    <section>
-      <label>
-        You are playing as:
-        <select
-          value={$localPlayerId ?? ''}
-          onchange={(e) => {
-            const v = (e.target as HTMLSelectElement).value;
-            localPlayerId.set(v === '' ? null : v);
-          }}
-        >
-          <option value="">Everyone (show all)</option>
-          {#each $gameState.players as p}
-            <option value={p.id}>{p.name}{p.folded ? ' (folded)' : ''}</option>
-          {/each}
-        </select>
-      </label>
-    </section>
-  {/if}
 
   <!-- ── Always-visible player hands ───────────────────────────────────────── -->
   {#if $gameState}
