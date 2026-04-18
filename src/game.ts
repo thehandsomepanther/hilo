@@ -418,6 +418,23 @@ export function applyBetChoices(
   return { ...state, phase: 'results', players };
 }
 
+/**
+ * Record a single player's bet choice without advancing the phase.
+ * Returns the updated state and whether every active player has now chosen.
+ * Used in networked play where choices arrive one at a time.
+ */
+export function recordBetChoice(
+  state: GameState,
+  playerId: string,
+  choice: 'high' | 'low' | 'swing',
+): { state: GameState; allChosen: boolean } {
+  const players: Player[] = state.players.map((p) =>
+    p.id === playerId ? { ...p, betChoice: choice } : p,
+  );
+  const allChosen = players.filter((p) => !p.folded).every((p) => p.betChoice !== null);
+  return { state: { ...state, players }, allChosen };
+}
+
 /** Store computed equation results for a player. */
 export function recordEquationResults(
   state: GameState,

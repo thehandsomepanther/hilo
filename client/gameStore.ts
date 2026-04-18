@@ -26,6 +26,7 @@ import {
   applyBettingAction,
   resetBettingRound,
   applyBetChoices,
+  recordBetChoice,
   recordEquationResults,
 } from '../src/game';
 import { evaluateEquation } from '../src/equation';
@@ -283,6 +284,40 @@ export function doAdvanceToBetting2(): void {
 
 // ─── High/Low Bet ─────────────────────────────────────────────────────────────
 
+/**
+ * Internal helper: record one player's choice and, if everyone has now chosen,
+ * resolve the round and advance to results.
+ */
+function applyOneChoice(state: GameState, playerId: string, choice: 'high' | 'low' | 'swing'): void {
+  const { state: next, allChosen } = recordBetChoice(state, playerId, choice);
+  if (allChosen) {
+    const resultsState = { ...next, phase: 'results' as const };
+    roundResult.set(resolveRound(resultsState));
+    gameState.set(resultsState);
+  } else {
+    gameState.set(next);
+  }
+}
+
+/**
+ * Submit a single player's bet choice.  Used in networked play where each
+ * client only controls their own player.
+ *
+ * In peer mode the action is forwarded to the host (with the player ID
+ * included so the host knows whose choice it is).
+ */
+export function submitMyBetChoice(choice: 'high' | 'low' | 'swing'): void {
+  const pid = get(localPlayerId);
+  if (!pid) return;
+  if (get(networkMode) === 'peer') {
+    peerNet?.send({ type: 'action', payload: { name: 'submitMyBetChoice', args: [pid, choice] } });
+    return;
+  }
+  const state = get(gameState);
+  if (!state) return;
+  applyOneChoice(state, pid, choice);
+}
+
 export function doSubmitBetChoices(choices: Map<string, Player['betChoice']>): void {
   if (get(networkMode) === 'peer') {
     const obj = Object.fromEntries(choices) as Record<string, 'high' | 'low' | 'swing' | null>;
@@ -464,5 +499,11 @@ function applyPeerAction(action: SerializedAction): void {
     case 'updateLobbyName':
       updateLobbyName(action.args[0], action.args[1]);
       break;
+    case 'submitMyBetChoice': {
+      const [playerId, choice] = action.args;
+      const state = get(gameState);
+      if (state) applyOneChoice(state, playerId, choice);
+      break;
+    }
   }
 }

@@ -78,7 +78,9 @@ export type SerializedAction =
   | { name: 'doNextRound' }
   | { name: 'resolveDecision';     args: [MultiplicationDecision] }
   /** Peer requests a name change for their own lobby slot. */
-  | { name: 'updateLobbyName';     args: [number, string] };
+  | { name: 'updateLobbyName';     args: [number, string] }
+  /** Peer submits their own bet choice (networked play, one player at a time). */
+  | { name: 'submitMyBetChoice';   args: [string, 'high' | 'low' | 'swing'] };
 
 /** Messages sent from a peer to the host. */
 export type PeerMsg = { type: 'action'; payload: SerializedAction };
