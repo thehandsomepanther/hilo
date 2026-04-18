@@ -37,7 +37,7 @@ import {
   serializeRoundResult,
   deserializeRoundResult,
 } from './network';
-import type { SerializedAction } from './network';
+import type { SerializedAction, LobbyState } from './network';
 
 // ─── Stores ───────────────────────────────────────────────────────────────────
 
@@ -65,6 +65,23 @@ export const networkMode = writable<'standalone' | 'host' | 'peer'>('standalone'
  * set   → only that player's private state is shown; other players see public info only.
  */
 export const localPlayerId = writable<string | null>(null);
+
+/**
+ * Pre-game lobby — shared across all clients before initGame is called.
+ * Host is the source of truth; peers receive full snapshots via 'lobby' messages.
+ */
+export const lobbyState = writable<LobbyState>({
+  players: [{ name: '' }, { name: '' }],
+  startingChips: 50,
+  forcedBetAmount: 1,
+});
+
+/**
+ * The lobby slot index this client owns.
+ * null   → standalone (no networking); all slots are locally controlled.
+ * number → host (0) or peer (1+); only that slot's name is editable here.
+ */
+export const myPlayerIndex = writable<number | null>(null);
 
 // ─── Network objects (module-level, not reactive) ─────────────────────────────
 
@@ -96,6 +113,10 @@ pendingDecision.subscribe((pd) => {
   }
 });
 
+lobbyState.subscribe((ls) => {
+  if (hostNet) hostNet.broadcast({ type: 'lobby', payload: ls });
+});
+
 // ─── Dealing helpers ──────────────────────────────────────────────────────────
 
 /** Called by dealing.ts when a × card is drawn. Sets `pendingDecision` and
@@ -120,6 +141,24 @@ export function resolveDecision(decision: MultiplicationDecision): void {
   }
 }
 
+// ─── Lobby actions ────────────────────────────────────────────────────────────
+
+/**
+ * Update the name for one lobby slot.
+ * In peer mode the request is forwarded to the host; otherwise updates locally
+ * (and the lobbyState subscription will broadcast to all peers if hosting).
+ */
+export function updateLobbyName(index: number, name: string): void {
+  if (get(networkMode) === 'peer') {
+    peerNet?.send({ type: 'action', payload: { name: 'updateLobbyName', args: [index, name] } });
+    return;
+  }
+  lobbyState.update((s) => {
+    const players = s.players.map((p, i) => (i === index ? { ...p, name } : p));
+    return { ...s, players };
+  });
+}
+
 // ─── Game lifecycle ───────────────────────────────────────────────────────────
 
 export function initGame(
@@ -134,6 +173,9 @@ export function initGame(
   const s = createGame(playerNames, startingChips, forcedBetAmount);
   gameState.set(startRound(s));
   roundResult.set(null);
+  // Auto-assign localPlayerId from the lobby slot (skipped in standalone where index is null).
+  const idx = get(myPlayerIndex);
+  if (idx !== null) localPlayerId.set(`player-${idx}`);
 }
 
 export function doForcedBets(): void {
@@ -283,13 +325,28 @@ export async function setupAsHost(peerId: string): Promise<string> {
   if (!hostNet) {
     hostNet = new HostNetwork();
     networkMode.set('host');
+    myPlayerIndex.set(0); // host is always slot 0
 
     hostNet.onMessage = (_pid, msg) => {
       applyPeerAction(msg.payload);
     };
 
-    // When a peer's channel opens, immediately sync them to the current state.
+    // When a peer's channel opens: assign them a lobby slot and sync state.
     hostNet.onConnected = (pid) => {
+      // Add a new slot for this peer; the subscription will broadcast the lobby update.
+      lobbyState.update((ls) => ({
+        ...ls,
+        players: [...ls.players, { name: '' }],
+      }));
+      const currentLobby = get(lobbyState);
+      const peerIndex = currentLobby.players.length - 1;
+
+      hostNet!.send(pid, { type: 'slotAssignment', payload: { playerIndex: peerIndex } });
+      // Lobby is broadcast automatically via the subscription, but we also send
+      // it directly in case the subscription fired before this peer was connected.
+      hostNet!.send(pid, { type: 'lobby', payload: currentLobby });
+
+      // Sync in-progress game state if the game has already started.
       const s = get(gameState);
       const r = get(roundResult);
       const pd = get(pendingDecision);
@@ -322,6 +379,11 @@ export async function setupAsPeer(offerBlob: string): Promise<string> {
     switch (msg.type) {
       case 'state':
         gameState.set(msg.payload);
+        // Auto-assign localPlayerId the first time a game state arrives.
+        if (!get(localPlayerId)) {
+          const idx = get(myPlayerIndex);
+          if (idx !== null) localPlayerId.set(`player-${idx}`);
+        }
         break;
 
       case 'roundResult':
@@ -340,6 +402,14 @@ export async function setupAsPeer(offerBlob: string): Promise<string> {
         } else {
           pendingDecision.set(null);
         }
+        break;
+
+      case 'lobby':
+        lobbyState.set(msg.payload);
+        break;
+
+      case 'slotAssignment':
+        myPlayerIndex.set(msg.payload.playerIndex);
         break;
     }
   };
@@ -388,6 +458,9 @@ function applyPeerAction(action: SerializedAction): void {
       break;
     case 'resolveDecision':
       resolveDecision(action.args[0]);
+      break;
+    case 'updateLobbyName':
+      updateLobbyName(action.args[0], action.args[1]);
       break;
   }
 }

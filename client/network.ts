@@ -15,6 +15,21 @@
 import type { GameState, Player, MultiplicationDecision, RoundResult } from '../src/types';
 import type { BettingAction } from '../src/game';
 
+// ─── Lobby types ─────────────────────────────────────────────────────────────
+
+/** One entry in the pre-game lobby — just the player's chosen name. */
+export type LobbyPlayer = { name: string };
+
+/**
+ * Shared pre-game state that all clients mirror before `initGame` is called.
+ * The host is the source of truth; peers receive updates via the 'lobby' message.
+ */
+export type LobbyState = {
+  players: LobbyPlayer[];
+  startingChips: number;
+  forcedBetAmount: number;
+};
+
 // ─── Serialization helpers ────────────────────────────────────────────────────
 
 /**
@@ -42,7 +57,11 @@ export type HostMsg =
   | { type: 'state'; payload: GameState }
   | { type: 'roundResult'; payload: PlainRoundResult | null }
   /** Tells peers that a × card decision is pending for this player. */
-  | { type: 'pendingDecision'; payload: { player: Player } | null };
+  | { type: 'pendingDecision'; payload: { player: Player } | null }
+  /** Full lobby snapshot — sent on every lobby change and on initial peer connect. */
+  | { type: 'lobby'; payload: LobbyState }
+  /** Tells the connecting peer which slot index they own. */
+  | { type: 'slotAssignment'; payload: { playerIndex: number } };
 
 /**
  * A serialisable representation of every game action a peer can invoke.
@@ -57,7 +76,9 @@ export type SerializedAction =
   | { name: 'doAdvanceToBetting2' }
   | { name: 'doSubmitBetChoices';  args: [Record<string, 'high' | 'low' | 'swing' | null>] }
   | { name: 'doNextRound' }
-  | { name: 'resolveDecision';     args: [MultiplicationDecision] };
+  | { name: 'resolveDecision';     args: [MultiplicationDecision] }
+  /** Peer requests a name change for their own lobby slot. */
+  | { name: 'updateLobbyName';     args: [number, string] };
 
 /** Messages sent from a peer to the host. */
 export type PeerMsg = { type: 'action'; payload: SerializedAction };
