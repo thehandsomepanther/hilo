@@ -1,5 +1,11 @@
 <script lang="ts">
+  import { onMount } from 'svelte';
   import { gameState, roundResult, doNextRound } from '../gameStore';
+
+  onMount(() => {
+    console.log('[Results] mounted, roundResult=%o gameState.phase=%s',
+      $roundResult, $gameState?.phase);
+  });
 
   const lowWinner = $derived(
     $roundResult?.lowWinnerId

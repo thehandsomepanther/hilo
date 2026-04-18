@@ -293,9 +293,22 @@ function applyOneChoice(state: GameState, playerId: string, choice: 'high' | 'lo
   const { state: next, allChosen } = recordBetChoice(state, playerId, choice);
   console.log('[applyOneChoice] allChosen=%s', allChosen);
   if (allChosen) {
-    const resultsState = { ...next, phase: 'results' as const };
-    roundResult.set(resolveRound(resultsState));
-    gameState.set(resultsState);
+    try {
+      const resultsState = { ...next, phase: 'results' as const };
+      console.log('[applyOneChoice] calling resolveRound, pot=%d activePlayers=%o',
+        resultsState.pot,
+        resultsState.players.filter(p => !p.folded).map(p => ({ id: p.id, betChoice: p.betChoice, lowResult: p.lowResult, highResult: p.highResult })),
+      );
+      const result = resolveRound(resultsState);
+      console.log('[applyOneChoice] resolveRound ok: lowWinner=%s highWinner=%s payouts=%o',
+        result.lowWinnerId, result.highWinnerId, Object.fromEntries(result.payouts));
+      roundResult.set(result);
+      console.log('[applyOneChoice] roundResult.set done');
+      gameState.set(resultsState);
+      console.log('[applyOneChoice] gameState.set done — phase should now be results');
+    } catch (e) {
+      console.error('[applyOneChoice] THREW:', e);
+    }
   } else {
     gameState.set(next);
   }

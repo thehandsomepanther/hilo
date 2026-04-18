@@ -18,6 +18,10 @@
 
   /** True once the user has finished (or skipped) network setup. */
   let networkConfigured = $state(false);
+
+  $effect(() => {
+    console.log('[App] phase=%s gameState.phase=%s', phase, $gameState?.phase ?? 'null');
+  });
 </script>
 
 <header>
