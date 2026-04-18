@@ -37,6 +37,7 @@ export function createGame(
     activePlayerIndex: 0,
     calculationTimeLimit,
     round: 0,
+    bettingActionsThisRound: 0,
   };
 }
 
@@ -66,6 +67,7 @@ export function startRound(state: GameState): GameState {
     pot: 0,
     currentBet: 0,
     round: state.round + 1,
+    bettingActionsThisRound: 0,
   };
 }
 
@@ -313,6 +315,7 @@ export function applyBettingAction(
         pot: state.pot + extra,
         currentBet: action.amount,
         activePlayerIndex: nextActiveIndex(players, idx),
+        bettingActionsThisRound: state.bettingActionsThisRound + 1,
       };
       return { state: nextState, roundComplete: isBettingComplete(nextState) };
     }
@@ -331,6 +334,7 @@ export function applyBettingAction(
         players,
         pot: state.pot + paid,
         activePlayerIndex: nextActiveIndex(players, idx),
+        bettingActionsThisRound: state.bettingActionsThisRound + 1,
       };
       return { state: nextState, roundComplete: isBettingComplete(nextState) };
     }
@@ -343,6 +347,7 @@ export function applyBettingAction(
         ...state,
         players,
         activePlayerIndex: nextActiveIndex(players, idx),
+        bettingActionsThisRound: state.bettingActionsThisRound + 1,
       };
       return { state: nextState, roundComplete: isBettingComplete(nextState) };
     }
@@ -354,6 +359,7 @@ export function applyBettingAction(
         ...state,
         players,
         activePlayerIndex: nextActiveIndex(players, idx),
+        bettingActionsThisRound: state.bettingActionsThisRound + 1,
       };
       const activePlayers = nextState.players.filter((p) => !p.folded);
       if (activePlayers.length === 1) {
@@ -364,10 +370,16 @@ export function applyBettingAction(
   }
 }
 
-/** Returns true when all active (non-folded) players have matched the current bet. */
+/**
+ * Returns true when all active (non-folded) players have matched the current
+ * bet AND every active player has taken at least one action this round.
+ * The second condition prevents the round from ending before anyone acts
+ * (e.g. right after a resetBettingRound where all bets are 0).
+ */
 export function isBettingComplete(state: GameState): boolean {
   const active = state.players.filter((p) => !p.folded);
   if (active.length <= 1) return true;
+  if (state.bettingActionsThisRound < active.length) return false;
   return active.every((p) => p.currentBet === state.currentBet);
 }
 
@@ -389,7 +401,7 @@ function nextActiveIndex(players: Player[], currentIdx: number): number {
  */
 export function resetBettingRound(state: GameState, nextPhase: GameState['phase']): GameState {
   const players: Player[] = state.players.map((p) => ({ ...p, currentBet: 0 }));
-  return { ...state, phase: nextPhase, players, currentBet: 0 };
+  return { ...state, phase: nextPhase, players, currentBet: 0, bettingActionsThisRound: 0 };
 }
 
 // ─── High/Low Bet ─────────────────────────────────────────────────────────────

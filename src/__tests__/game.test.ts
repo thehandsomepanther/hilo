@@ -139,9 +139,18 @@ describe('betting', () => {
     expect(folded).toHaveLength(1);
   });
 
-  it('round is complete when all active players match bet', () => {
+  it('round is NOT complete right after a reset (no one has acted)', () => {
+    const state = resetBettingRound(bettingState(), 'betting-1');
+    expect(isBettingComplete(state)).toBe(false);
+  });
+
+  it('round is complete after all active players have checked', () => {
     let state = resetBettingRound(bettingState(), 'betting-1');
-    expect(isBettingComplete(state)).toBe(true); // all at 0
+    const active = state.players.filter((p) => !p.folded);
+    for (let i = 0; i < active.length; i++) {
+      ({ state } = applyBettingAction(state, { type: 'check' }));
+    }
+    expect(isBettingComplete(state)).toBe(true);
   });
 
   it('round is complete when only one player remains', () => {

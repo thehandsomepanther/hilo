@@ -97,6 +97,12 @@ export type GameState = {
   /** Seconds allowed for the calculation phase. */
   calculationTimeLimit: number;
   round: number;
+  /**
+   * Number of individual betting actions taken in the current betting round.
+   * Prevents the round from ending before every active player has had a turn,
+   * even when all bets happen to be equal (e.g. everyone at 0 after a reset).
+   */
+  bettingActionsThisRound: number;
 };
 
 // ─── Results ─────────────────────────────────────────────────────────────────
