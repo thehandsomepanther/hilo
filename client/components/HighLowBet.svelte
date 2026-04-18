@@ -56,7 +56,13 @@
       : null,
   );
 
+  function pickOption(choice: 'high' | 'low' | 'swing') {
+    console.log('[HighLowBet] pickOption', choice);
+    myPick = choice;
+  }
+
   function submitMine() {
+    console.log('[HighLowBet] submitMine myPick=%s localPlayerId=%s', myPick, $localPlayerId);
     if (!myPick) { myError = 'Please choose an option first.'; return; }
     if (myPick === 'swing') {
       const me = $gameState?.players.find((p) => p.id === $localPlayerId);
@@ -85,17 +91,20 @@
         <legend>Your choice</legend>
         <label>
           <input type="radio" name="my-choice" value="low"
-            bind:group={myPick} />
+            checked={myPick === 'low'}
+            onchange={() => pickOption('low')} />
           Low (target: 1)
         </label>
         <label>
           <input type="radio" name="my-choice" value="high"
-            bind:group={myPick} />
+            checked={myPick === 'high'}
+            onchange={() => pickOption('high')} />
           High (target: 20)
         </label>
         <label>
           <input type="radio" name="my-choice" value="swing"
-            bind:group={myPick} />
+            checked={myPick === 'swing'}
+            onchange={() => pickOption('swing')} />
           Swing (both — must win both pots)
         </label>
       </fieldset>

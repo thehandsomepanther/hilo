@@ -289,7 +289,9 @@ export function doAdvanceToBetting2(): void {
  * resolve the round and advance to results.
  */
 function applyOneChoice(state: GameState, playerId: string, choice: 'high' | 'low' | 'swing'): void {
+  console.log('[applyOneChoice] playerId=%s choice=%s', playerId, choice);
   const { state: next, allChosen } = recordBetChoice(state, playerId, choice);
+  console.log('[applyOneChoice] allChosen=%s', allChosen);
   if (allChosen) {
     const resultsState = { ...next, phase: 'results' as const };
     roundResult.set(resolveRound(resultsState));
@@ -308,13 +310,15 @@ function applyOneChoice(state: GameState, playerId: string, choice: 'high' | 'lo
  */
 export function submitMyBetChoice(choice: 'high' | 'low' | 'swing'): void {
   const pid = get(localPlayerId);
-  if (!pid) return;
-  if (get(networkMode) === 'peer') {
+  const mode = get(networkMode);
+  console.log('[submitMyBetChoice] choice=%s pid=%s mode=%s', choice, pid, mode);
+  if (!pid) { console.warn('[submitMyBetChoice] no localPlayerId — aborting'); return; }
+  if (mode === 'peer') {
     peerNet?.send({ type: 'action', payload: { name: 'submitMyBetChoice', args: [pid, choice] } });
     return;
   }
   const state = get(gameState);
-  if (!state) return;
+  if (!state) { console.warn('[submitMyBetChoice] no gameState — aborting'); return; }
   applyOneChoice(state, pid, choice);
 }
 
@@ -463,6 +467,7 @@ export function getConnectedPeerIds(): string[] {
 
 /** Dispatch a serialised peer action to the corresponding local function. */
 function applyPeerAction(action: SerializedAction): void {
+  console.log('[applyPeerAction]', action.name, 'args' in action ? action.args : '');
   switch (action.name) {
     case 'initGame':
       initGame(...action.args);
