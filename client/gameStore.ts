@@ -59,6 +59,13 @@ export const roundResult = writable<RoundResult | null>(null);
 /** Current networking role. */
 export const networkMode = writable<'standalone' | 'host' | 'peer'>('standalone');
 
+/**
+ * The player ID this client is playing as.
+ * null  → no identity chosen yet; all players' state shown (standalone default).
+ * set   → only that player's private state is shown; other players see public info only.
+ */
+export const localPlayerId = writable<string | null>(null);
+
 // ─── Network objects (module-level, not reactive) ─────────────────────────────
 
 let hostNet: HostNetwork | null = null;

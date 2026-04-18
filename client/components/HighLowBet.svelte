@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { gameState, doSubmitBetChoices } from '../gameStore';
+  import { gameState, doSubmitBetChoices, localPlayerId } from '../gameStore';
   import type { Player } from '../../src/types';
 
   // Collect each player's choice before simultaneous reveal
@@ -57,39 +57,44 @@
   {#if !revealed}
     {#each $gameState?.players ?? [] as player}
       {#if !player.folded}
-        <fieldset>
-          <legend>{player.name}</legend>
-          <label>
-            <input
-              type="radio"
-              name="choice-{player.id}"
-              value="low"
-              checked={choices.get(player.id) === 'low'}
-              onchange={() => setChoice(player.id, 'low')}
-            />
-            Low (target: 1)
-          </label>
-          <label>
-            <input
-              type="radio"
-              name="choice-{player.id}"
-              value="high"
-              checked={choices.get(player.id) === 'high'}
-              onchange={() => setChoice(player.id, 'high')}
-            />
-            High (target: 20)
-          </label>
-          <label>
-            <input
-              type="radio"
-              name="choice-{player.id}"
-              value="swing"
-              checked={choices.get(player.id) === 'swing'}
-              onchange={() => setChoice(player.id, 'swing')}
-            />
-            Swing (both — must win both pots)
-          </label>
-        </fieldset>
+        {@const isMe = !$localPlayerId || player.id === $localPlayerId}
+        {#if isMe}
+          <fieldset>
+            <legend>{player.name}</legend>
+            <label>
+              <input
+                type="radio"
+                name="choice-{player.id}"
+                value="low"
+                checked={choices.get(player.id) === 'low'}
+                onchange={() => setChoice(player.id, 'low')}
+              />
+              Low (target: 1)
+            </label>
+            <label>
+              <input
+                type="radio"
+                name="choice-{player.id}"
+                value="high"
+                checked={choices.get(player.id) === 'high'}
+                onchange={() => setChoice(player.id, 'high')}
+              />
+              High (target: 20)
+            </label>
+            <label>
+              <input
+                type="radio"
+                name="choice-{player.id}"
+                value="swing"
+                checked={choices.get(player.id) === 'swing'}
+                onchange={() => setChoice(player.id, 'swing')}
+              />
+              Swing (both — must win both pots)
+            </label>
+          </fieldset>
+        {:else}
+          <p><em>{player.name} — choice hidden until reveal.</em></p>
+        {/if}
       {/if}
     {/each}
 

@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { gameState, pendingDecision, isDealing, resolveDecision, networkMode } from './gameStore';
+  import { gameState, pendingDecision, isDealing, resolveDecision, networkMode, localPlayerId } from './gameStore';
   import Setup from './components/Setup.svelte';
   import ForcedBet from './components/ForcedBet.svelte';
   import Dealing from './components/Dealing.svelte';
@@ -100,18 +100,40 @@
     {/if}
   </main>
 
-  <!-- ── Always-visible state for all players ─────────────────────────────── -->
+  <!-- ── Player identity selector ─────────────────────────────────────────── -->
+  {#if $gameState && phase !== 'setup'}
+    <hr />
+    <section>
+      <label>
+        You are playing as:
+        <select
+          value={$localPlayerId ?? ''}
+          onchange={(e) => {
+            const v = (e.target as HTMLSelectElement).value;
+            localPlayerId.set(v === '' ? null : v);
+          }}
+        >
+          <option value="">Everyone (show all)</option>
+          {#each $gameState.players as p}
+            <option value={p.id}>{p.name}{p.folded ? ' (folded)' : ''}</option>
+          {/each}
+        </select>
+      </label>
+    </section>
+  {/if}
+
+  <!-- ── Always-visible player hands ───────────────────────────────────────── -->
   {#if $gameState}
     <hr />
     <section>
-      <h2>All Players</h2>
+      <h2>{$localPlayerId ? 'Your hand' : 'All players'}</h2>
       <div>
         {#each $gameState.players as player}
           <PlayerHand
             {player}
             isActive={player.id === activePlayerId &&
               (phase === 'betting-1' || phase === 'betting-2')}
-            showSecret={true}
+            showSecret={!$localPlayerId || player.id === $localPlayerId}
           />
         {/each}
       </div>

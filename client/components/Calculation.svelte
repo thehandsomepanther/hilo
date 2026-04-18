@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onDestroy } from 'svelte';
-  import { gameState, submitEquation, doAdvanceToBetting2 } from '../gameStore';
+  import { gameState, submitEquation, doAdvanceToBetting2, localPlayerId } from '../gameStore';
   import type { Card, Player } from '../../src/types';
 
   // ─── Token helpers ────────────────────────────────────────────────────────
@@ -141,70 +141,91 @@
 
   {#each $gameState?.players ?? [] as player}
     {#if !player.folded}
+      {@const isMe = !$localPlayerId || player.id === $localPlayerId}
       {@const tokens = getTokens(player)}
       {@const ps = slots[player.id]}
       {@const v = validation[player.id]}
 
-      <!--
-        Reusable snippet for one equation's slot row.
-        Captures player, tokens, ps, v from the enclosing block.
-      -->
-      {#snippet equationRow(target: 'low' | 'high', legend: string)}
-        {@const eqSlots = ps?.[target] ?? []}
-        {@const vState = v?.[target]}
-        <fieldset>
-          <legend>{legend}</legend>
+      {#if isMe}
+        <!--
+          Full equation builder for the local player.
+          Reusable snippet captures player, tokens, ps, v from the enclosing block.
+        -->
+        {#snippet equationRow(target: 'low' | 'high', legend: string)}
+          {@const eqSlots = ps?.[target] ?? []}
+          {@const vState = v?.[target]}
+          <fieldset>
+            <legend>{legend}</legend>
 
-          {#each eqSlots as _, slotIdx}
-            <select
-              value={eqSlots[slotIdx] != null ? String(eqSlots[slotIdx]) : ''}
-              onchange={(e) => {
-                const raw = (e.target as HTMLSelectElement).value;
-                setSlot(player.id, target, slotIdx, raw === '' ? null : Number(raw));
-              }}
+            {#each eqSlots as _, slotIdx}
+              <select
+                value={eqSlots[slotIdx] != null ? String(eqSlots[slotIdx]) : ''}
+                onchange={(e) => {
+                  const raw = (e.target as HTMLSelectElement).value;
+                  setSlot(player.id, target, slotIdx, raw === '' ? null : Number(raw));
+                }}
+              >
+                <option value="">—</option>
+                {#each tokens as token, tokenIdx}
+                  <option
+                    value={String(tokenIdx)}
+                    disabled={
+                      isUsedElsewhere(eqSlots, tokenIdx, slotIdx) ||
+                      isDisabledByPosition(token, slotIdx, tokens.length)
+                    }
+                  >
+                    {tokenLabel(token, tokenIdx, tokens)}
+                  </option>
+                {/each}
+              </select>
+            {/each}
+
+            <br />
+            <output>{ps ? buildPreview(eqSlots, tokens) : '—'}</output>
+
+            <button
+              type="button"
+              disabled={!allFilled(player.id, target)}
+              onclick={() => validate(player.id, target)}
             >
-              <option value="">—</option>
-              {#each tokens as token, tokenIdx}
-                <option
-                  value={String(tokenIdx)}
-                  disabled={
-                    isUsedElsewhere(eqSlots, tokenIdx, slotIdx) ||
-                    isDisabledByPosition(token, slotIdx, tokens.length)
-                  }
-                >
-                  {tokenLabel(token, tokenIdx, tokens)}
-                </option>
-              {/each}
-            </select>
-          {/each}
+              Validate
+            </button>
 
-          <br />
-          <output>{ps ? buildPreview(eqSlots, tokens) : '—'}</output>
+            {#if vState?.error}
+              <output role="alert">Error: {vState.error}</output>
+            {:else if vState?.submitted}
+              {@const result = target === 'low'
+                ? $gameState?.players.find((p) => p.id === player.id)?.lowResult
+                : $gameState?.players.find((p) => p.id === player.id)?.highResult}
+              <output>✓ = {result?.toFixed(4)}</output>
+            {/if}
+          </fieldset>
+        {/snippet}
 
-          <button
-            type="button"
-            disabled={!allFilled(player.id, target)}
-            onclick={() => validate(player.id, target)}
-          >
-            Validate
-          </button>
-
-          {#if vState?.error}
-            <output role="alert">Error: {vState.error}</output>
-          {:else if vState?.submitted}
-            {@const result = target === 'low'
-              ? $gameState?.players.find((p) => p.id === player.id)?.lowResult
-              : $gameState?.players.find((p) => p.id === player.id)?.highResult}
-            <output>✓ = {result?.toFixed(4)}</output>
+        <fieldset>
+          <legend>{player.name}</legend>
+          {@render equationRow('low',  'Low equation  (target: 1)')}
+          {@render equationRow('high', 'High equation (target: 20)')}
+        </fieldset>
+      {:else}
+        <!-- Read-only summary for other players -->
+        <fieldset>
+          <legend>{player.name}</legend>
+          <p>
+            Cards: {tokens.map((t) => tokenExpr(t)).join(' ')}
+          </p>
+          {#if player.lowEquation !== null}
+            <p>Low: <code>{player.lowEquation}</code> = {player.lowResult?.toFixed(4)}</p>
+          {:else}
+            <p><em>Low equation not yet submitted.</em></p>
+          {/if}
+          {#if player.highEquation !== null}
+            <p>High: <code>{player.highEquation}</code> = {player.highResult?.toFixed(4)}</p>
+          {:else}
+            <p><em>High equation not yet submitted.</em></p>
           {/if}
         </fieldset>
-      {/snippet}
-
-      <fieldset>
-        <legend>{player.name}</legend>
-        {@render equationRow('low',  'Low equation  (target: 1)')}
-        {@render equationRow('high', 'High equation (target: 20)')}
-      </fieldset>
+      {/if}
     {/if}
   {/each}
 
