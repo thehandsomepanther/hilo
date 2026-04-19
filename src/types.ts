@@ -19,64 +19,79 @@ export type Card = NumberCard | OperatorCard;
 
 // ─── Suit ordering ───────────────────────────────────────────────────────────
 
-/** Higher index = higher rank for High tie-breaking (Gold wins). */
+/** Higher index = higher rank for High (20) tie-breaking. Gold wins. */
 export const SUIT_RANK_HIGH: Record<Suit, number> = {
-  Black: 0,
-  Bronze: 1,
-  Silver: 2,
-  Gold: 3,
+  Black: 0, Bronze: 1, Silver: 2, Gold: 3,
 };
 
-/** Higher index = higher rank for Low tie-breaking (Black wins). */
+/** Higher index = higher rank for Low (1) tie-breaking. Black wins. */
 export const SUIT_RANK_LOW: Record<Suit, number> = {
-  Gold: 0,
-  Silver: 1,
-  Bronze: 2,
-  Black: 3,
+  Gold: 0, Silver: 1, Bronze: 2, Black: 3,
 };
 
-// ─── Player ───────────────────────────────────────────────────────────────────
+// ─── Players ─────────────────────────────────────────────────────────────────
 
 export type BetChoice = 'high' | 'low' | 'swing';
 
-export type Player = {
+type BasePlayer = {
   id: string;
   name: string;
   chips: number;
-  /** Personal operators kept for duration of game. Always includes ÷; may lose + or - if × acquired. */
   personalOperators: OperatorCard[];
-  /** Face-down secret card; null before deal. */
-  secretCard: NumberCard | null;
-  /** Face-up cards visible to all. */
-  faceUpCards: Card[];
-  /** Chips bet in the current betting round (not cumulative across rounds). */
+  /** Chips bet in the current betting round; 0 between rounds. */
   currentBet: number;
   folded: boolean;
-  /** Set during High/Low Bet phase. */
+};
+
+/** Player before any cards have been dealt this round. */
+export type UndealPlayer = BasePlayer & {
+  secretCard: null;
+  faceUpCards: [];
+};
+
+/**
+ * Player after dealing phase 1 — holds cards, may have equations and a bet
+ * choice. `secretCard` is guaranteed non-null; downstream code never needs to
+ * null-check it.
+ */
+export type DealtPlayer = BasePlayer & {
+  secretCard: NumberCard;
+  faceUpCards: Card[];
   betChoice: BetChoice | null;
-  /** Equation string targeting 1 (used by low/swing). */
   lowEquation: string | null;
-  /** Equation string targeting 20 (used by high/swing). */
   highEquation: string | null;
   lowResult: number | null;
   highResult: number | null;
 };
 
-// ─── Game phases ─────────────────────────────────────────────────────────────
+/**
+ * Union of both player states.  Used in `Dealing1State` where players
+ * transition from UndealPlayer to DealtPlayer progressively.
+ */
+export type Player = UndealPlayer | DealtPlayer;
 
-export type GamePhase =
-  | 'setup'
-  | 'forced-bet'
-  | 'dealing-1'
-  | 'betting-1'
-  | 'dealing-2'
-  | 'calculation'
-  | 'betting-2'
-  | 'high-low-bet'
-  | 'results'
-  | 'game-over';
+// ─── Round result ─────────────────────────────────────────────────────────────
 
-// ─── Multiplication decision (during deal) ───────────────────────────────────
+/**
+ * Outcome of a completed round.
+ *
+ * `last-player-standing`: all others folded; sole survivor takes the whole pot.
+ *
+ * `contested`: pot split between closest-to-1 and closest-to-20 results.
+ *   `payouts` maps playerId → chips won.  The special key `'__rollover__'`
+ *   holds chips with no valid winner that carry into the next round's pot.
+ *   Uses a plain object (not Map) so it survives JSON serialization.
+ */
+export type RoundResult =
+  | { kind: 'last-player-standing'; winnerId: string; payout: number }
+  | {
+      kind: 'contested';
+      lowWinnerId: string | null;
+      highWinnerId: string | null;
+      payouts: Record<string, number>;
+    };
+
+// ─── Multiplication decision ──────────────────────────────────────────────────
 
 export type MultiplicationDecision =
   | { accept: true; discard: '+' | '-' }
@@ -84,40 +99,68 @@ export type MultiplicationDecision =
 
 // ─── Game state ───────────────────────────────────────────────────────────────
 
-export type GameState = {
-  phase: GamePhase;
-  players: Player[];
+/**
+ * Fields present in every phase.  Phase-specific types extend this.
+ * `calculationTimeLimit` is configuration that never changes mid-game;
+ * it lives here so the Calculation component can read it from state.
+ */
+type BaseState = {
   deck: Card[];
-  /** Total chips in the pot for the current round. */
   pot: number;
-  /** The current highest bet that all active players must match. */
-  currentBet: number;
   forcedBetAmount: number;
-  /** Index into players[] whose turn it is during a betting round. */
-  activePlayerIndex: number;
-  /** Seconds allowed for the calculation phase. */
   calculationTimeLimit: number;
   round: number;
-  /**
-   * Number of individual betting actions taken in the current betting round.
-   * Prevents the round from ending before every active player has had a turn,
-   * even when all bets happen to be equal (e.g. everyone at 0 after a reset).
-   */
-  bettingActionsThisRound: number;
-  /**
-   * Set when phase === 'game-over'. The ID of the last player with chips,
-   * or null if the game ended with no clear chip leader (all at zero).
-   */
-  winnerId: string | null;
-  /** Human-readable log of actions taken this round, in order. */
   log: string[];
 };
 
-// ─── Results ─────────────────────────────────────────────────────────────────
+// Phases share player-array types according to what has been dealt:
+type PreDealState  = BaseState & { players: UndealPlayer[] };
+type DealingState  = BaseState & { players: Player[] };    // mixed during dealing-1
+type PostDealState = BaseState & { players: DealtPlayer[] };
 
-export type RoundResult = {
-  lowWinnerId: string | null;
-  highWinnerId: string | null;
-  /** Chips awarded per player this round. */
-  payouts: Map<string, number>;
+// ── Phase-specific state types ────────────────────────────────────────────────
+
+export type SetupState       = PreDealState  & { phase: 'setup' };
+export type ForcedBetState   = PreDealState  & { phase: 'forced-bet' };
+
+/** Intermediate phase while cards are being dealt; players array is mixed. */
+export type Dealing1State    = DealingState  & { phase: 'dealing-1' };
+export type Dealing2State    = PostDealState & { phase: 'dealing-2' };
+
+export type Betting1State    = PostDealState & {
+  phase: 'betting-1';
+  activePlayerIndex: number;
+  currentBet: number;
+  bettingActionsThisRound: number;
 };
+export type Betting2State    = PostDealState & {
+  phase: 'betting-2';
+  activePlayerIndex: number;
+  currentBet: number;
+  bettingActionsThisRound: number;
+};
+
+export type CalculationState = PostDealState & { phase: 'calculation' };
+export type HighLowBetState  = PostDealState & { phase: 'high-low-bet' };
+
+/** Results phase embeds the round result — no separate store needed. */
+export type ResultsState     = PostDealState & { phase: 'results'; result: RoundResult };
+
+/** Game-over occurs after payouts; players are reset (UndealPlayer). */
+export type GameOverState    = PreDealState  & { phase: 'game-over'; winnerId: string };
+
+// ── Convenience union types ───────────────────────────────────────────────────
+
+export type BettingState = Betting1State | Betting2State;
+
+export type GameState =
+  | SetupState
+  | ForcedBetState
+  | Dealing1State
+  | Dealing2State
+  | Betting1State
+  | Betting2State
+  | CalculationState
+  | HighLowBetState
+  | ResultsState
+  | GameOverState;

@@ -1,120 +1,112 @@
 /**
- * gameStore.ts — all cross-component state and game-action dispatchers.
+ * gameStore.ts — cross-component state and game-action dispatchers.
  *
  * Components import from here; they never call src/ modules directly.
- * All game logic stays in src/; this file is pure orchestration.
+ * All game logic lives in src/; this file is pure orchestration.
+ *
+ * The game's full state (including round results) lives in a single `gameState`
+ * store — no separate `roundResult` store.  The `ResultsState` variant of
+ * `GameState` carries `result: RoundResult` directly.
  *
  * Networking modes
  * ────────────────
  * standalone — default; no WebRTC, everything runs locally.
- * host       — runs the game locally AND broadcasts every state change to
- *               connected peers via HostNetwork.  Incoming peer actions are
- *               dispatched to the same local functions so the host's game loop
- *               is the single source of truth.
- * peer       — receives state from the host via PeerNetwork; local action
- *               functions forward their arguments over the wire instead of
- *               running the game logic directly.
+ * host       — runs the game locally AND broadcasts every state change to peers.
+ *              Incoming peer actions are dispatched to the same local functions.
+ * peer       — receives state from the host; local action functions forward
+ *              arguments over the wire instead of running game logic directly.
  */
 
 import { writable, get } from 'svelte/store';
-import type { GameState, Player, MultiplicationDecision, RoundResult } from '../src/types';
+import type {
+  GameState, Player, DealtPlayer, MultiplicationDecision,
+  Dealing1State, Dealing2State, BettingState, HighLowBetState,
+  CalculationState, ResultsState,
+} from '../src/types';
 import type { BettingAction } from '../src/game';
 import {
-  createGame,
-  startRound,
+  createGame, startRound,
   collectForcedBets,
-  applyBettingAction,
-  resetBettingRound,
-  applyBetChoices,
-  recordBetChoice,
-  recordEquationResults,
-  checkGameOver,
+  applyBettingAction, advanceFromBetting,
+  applyBetChoices, recordBetChoice, advanceFromHighLowBet,
+  recordEquationResults, checkGameOver,
+  advanceFromResults,
 } from '../src/game';
 import { evaluateEquation } from '../src/equation';
-import { resolveRound, applyPayouts } from '../src/results';
-import { runDealPhase1Async, runDealPhase2Async } from './dealing';
-import {
-  HostNetwork,
-  PeerNetwork,
-  serializeRoundResult,
-  deserializeRoundResult,
-} from './network';
+import { startDealPhase1, startDealPhase2 } from './dealing';
+import type { DealStep } from './dealing';
+import { HostNetwork, PeerNetwork } from './network';
 import type { SerializedAction, LobbyState } from './network';
 
 // ─── Stores ───────────────────────────────────────────────────────────────────
 
 export const gameState = writable<GameState | null>(null);
 
-/** Set while an async deal is in progress — disable action buttons. */
+/** Set while a deal step is in-flight (awaiting a × card decision or iterating). */
 export const isDealing = writable(false);
 
-/** Set when the dealing async function needs the active player to choose. */
+/**
+ * Set when dealing is suspended awaiting a × card decision.
+ * Only the affected player (or host on their behalf) calls `resolveDecision`.
+ */
 export type PendingDecision = {
   player: Player;
   resolve: (d: MultiplicationDecision) => void;
 };
 export const pendingDecision = writable<PendingDecision | null>(null);
 
-/** Populated once bet choices are submitted; cleared on next round. */
-export const roundResult = writable<RoundResult | null>(null);
-
-/** Current networking role. */
 export const networkMode = writable<'standalone' | 'host' | 'peer'>('standalone');
 
-/**
- * The player ID this client is playing as.
- * null  → no identity chosen yet; all players' state shown (standalone default).
- * set   → only that player's private state is shown; other players see public info only.
- */
 export const localPlayerId = writable<string | null>(null);
 
-/**
- * Pre-game lobby — shared across all clients before initGame is called.
- * Host is the source of truth; peers receive full snapshots via 'lobby' messages.
- */
 export const lobbyState = writable<LobbyState>({
   players: [{ name: '' }, { name: '' }],
   startingChips: 50,
   forcedBetAmount: 1,
 });
 
-/**
- * The lobby slot index this client owns.
- * null   → standalone (no networking); all slots are locally controlled.
- * number → host (0) or peer (1+); only that slot's name is editable here.
- */
 export const myPlayerIndex = writable<number | null>(null);
 
-// ─── Network objects (module-level, not reactive) ─────────────────────────────
+// ─── Network objects ──────────────────────────────────────────────────────────
 
 let hostNet: HostNetwork | null = null;
 let peerNet: PeerNetwork | null = null;
 
-// ─── Broadcast helpers ────────────────────────────────────────────────────────
+/** Maps WebRTC peer ID → player index (e.g. 'peer-1' → 1). */
+const peerPlayerIndex = new Map<string, number>();
 
-// Whenever any of the three key stores change, push to all connected peers.
+/**
+ * During the high-low-bet phase, strip betChoice from every player except the
+ * one who owns `playerIndex`.  Prevents peers from seeing each other's hidden
+ * choices before the reveal.
+ */
+function sanitizeStateForPeer(state: GameState, playerIndex: number): GameState {
+  if (state.phase !== 'high-low-bet') return state;
+  const playerId = `player-${playerIndex}`;
+  return {
+    ...state,
+    players: state.players.map((p) => (p.id === playerId ? p : { ...p, betChoice: null })),
+  } as GameState;
+}
+
+// Broadcast state changes to peers.
 gameState.subscribe((s) => {
-  if (s && hostNet) hostNet.broadcast({ type: 'state', payload: s });
-});
-
-roundResult.subscribe((r) => {
-  if (hostNet) {
-    hostNet.broadcast({
-      type: 'roundResult',
-      payload: r ? serializeRoundResult(r) : null,
-    });
+  if (!s || !hostNet) return;
+  if (s.phase === 'high-low-bet') {
+    // Send each peer only their own betChoice — others are hidden until reveal.
+    for (const peerId of hostNet.getPeerIds()) {
+      const idx = peerPlayerIndex.get(peerId);
+      if (idx !== undefined) {
+        hostNet.send(peerId, { type: 'state', payload: sanitizeStateForPeer(s, idx) });
+      }
+    }
+  } else {
+    hostNet.broadcast({ type: 'state', payload: s });
   }
 });
-
 pendingDecision.subscribe((pd) => {
-  if (hostNet) {
-    hostNet.broadcast({
-      type: 'pendingDecision',
-      payload: pd ? { player: pd.player } : null,
-    });
-  }
+  if (hostNet) hostNet.broadcast({ type: 'pendingDecision', payload: pd ? { player: pd.player } : null });
 });
-
 lobbyState.subscribe((ls) => {
   if (hostNet) hostNet.broadcast({ type: 'lobby', payload: ls });
 });
@@ -122,66 +114,55 @@ lobbyState.subscribe((ls) => {
 // ─── Log helper ───────────────────────────────────────────────────────────────
 
 function appendLog(state: GameState, entry: string): GameState {
-  return { ...state, log: [...state.log, entry] };
+  return { ...state, log: [...state.log, entry] } as GameState;
 }
 
-// ─── Dealing helpers ──────────────────────────────────────────────────────────
+// ─── Dealing step runner ──────────────────────────────────────────────────────
 
-/** Called by dealing.ts when a × card is drawn. Sets `pendingDecision` and
- *  returns a Promise that resolves once the player has chosen via `resolveDecision`. */
-function makeRequestDecision(): (player: Player) => Promise<MultiplicationDecision> {
-  return (player: Player) =>
-    new Promise<MultiplicationDecision>((resolve) => {
-      pendingDecision.set({ player, resolve });
-    });
-}
-
-/** Called by the UI when the player submits their × choice. */
-export function resolveDecision(decision: MultiplicationDecision): void {
-  if (get(networkMode) === 'peer') {
-    peerNet?.send({ type: 'action', payload: { name: 'resolveDecision', args: [decision] } });
+/**
+ * Drive a DealStep to completion, suspending on × card decisions.
+ * Intermediate states are written to `gameState` for live UI updates.
+ */
+function runDealStep<Final extends GameState>(step: DealStep<Final>): void {
+  if (step.status === 'complete') {
+    isDealing.set(false);
+    gameState.set(step.state);
     return;
   }
-  const current = get(pendingDecision);
-  if (current) {
-    current.resolve(decision);
-    pendingDecision.set(null);
-  }
+
+  // Pause on × card — write intermediate state and wait for resolveDecision.
+  gameState.set(step.state as GameState);
+  pendingDecision.set({
+    player: step.player,
+    resolve: (d: MultiplicationDecision) => {
+      pendingDecision.set(null);
+      runDealStep(step.resume(d));
+    },
+  });
 }
 
 // ─── Lobby actions ────────────────────────────────────────────────────────────
 
-/**
- * Update the name for one lobby slot.
- * In peer mode the request is forwarded to the host; otherwise updates locally
- * (and the lobbyState subscription will broadcast to all peers if hosting).
- */
 export function updateLobbyName(index: number, name: string): void {
   if (get(networkMode) === 'peer') {
     peerNet?.send({ type: 'action', payload: { name: 'updateLobbyName', args: [index, name] } });
     return;
   }
-  lobbyState.update((s) => {
-    const players = s.players.map((p, i) => (i === index ? { ...p, name } : p));
-    return { ...s, players };
-  });
+  lobbyState.update((s) => ({
+    ...s,
+    players: s.players.map((p, i) => (i === index ? { ...p, name } : p)),
+  }));
 }
 
 // ─── Game lifecycle ───────────────────────────────────────────────────────────
 
-export function initGame(
-  playerNames: string[],
-  startingChips: number,
-  forcedBetAmount: number,
-): void {
+export function initGame(playerNames: string[], startingChips: number, forcedBetAmount: number): void {
   if (get(networkMode) === 'peer') {
     peerNet?.send({ type: 'action', payload: { name: 'initGame', args: [playerNames, startingChips, forcedBetAmount] } });
     return;
   }
   const s = createGame(playerNames, startingChips, forcedBetAmount);
   gameState.set(startRound(s));
-  roundResult.set(null);
-  // Auto-assign localPlayerId from the lobby slot (skipped in standalone where index is null).
   const idx = get(myPlayerIndex);
   if (idx !== null) localPlayerId.set(`player-${idx}`);
 }
@@ -192,31 +173,41 @@ export function doForcedBets(): void {
     return;
   }
   gameState.update((s) => {
-    if (!s) return null;
+    if (!s || s.phase !== 'forced-bet') return s;
     const next = collectForcedBets(s);
     return appendLog(next, `Forced bets collected — pot: ${next.pot}`);
   });
 }
 
-export async function doDeal(phase: 1 | 2): Promise<void> {
+export function doDeal(phase: 1 | 2): void {
   if (get(networkMode) === 'peer') {
     peerNet?.send({ type: 'action', payload: { name: 'doDeal', args: [phase] } });
     return;
   }
   const state = get(gameState);
   if (!state) return;
+
   isDealing.set(true);
-  try {
-    const requestDecision = makeRequestDecision();
-    const onUpdate = (s: GameState) => gameState.set(s);
-    const next =
-      phase === 1
-        ? await runDealPhase1Async(state, requestDecision, onUpdate)
-        : await runDealPhase2Async(state, requestDecision, onUpdate);
-    gameState.set(appendLog(next, `Dealing phase ${phase} complete`));
-  } finally {
-    isDealing.set(false);
+
+  if (phase === 1) {
+    if (state.phase !== 'dealing-1') return;
+    const step = startDealPhase1(state as Dealing1State);
+    runDealStep(step);
+  } else {
+    if (state.phase !== 'dealing-2') return;
+    const step = startDealPhase2(state as Dealing2State);
+    runDealStep(step);
   }
+}
+
+/** Called by the UI when the player submits their × card choice. */
+export function resolveDecision(decision: MultiplicationDecision): void {
+  if (get(networkMode) === 'peer') {
+    peerNet?.send({ type: 'action', payload: { name: 'resolveDecision', args: [decision] } });
+    return;
+  }
+  const current = get(pendingDecision);
+  if (current) current.resolve(decision);
 }
 
 // ─── Betting ──────────────────────────────────────────────────────────────────
@@ -227,100 +218,73 @@ export function doBettingAction(action: BettingAction): void {
     return;
   }
   const state = get(gameState);
-  if (!state) return;
+  if (!state || (state.phase !== 'betting-1' && state.phase !== 'betting-2')) return;
 
-  const player = state.players[state.activePlayerIndex];
+  const bettingState = state as BettingState;
+  const player = bettingState.players[bettingState.activePlayerIndex];
   const playerName = player?.name ?? 'Unknown';
+
   let logEntry: string;
   switch (action.type) {
-    case 'check':
-      logEntry = `${playerName} checked`;
-      break;
+    case 'check':  logEntry = `${playerName} checked`; break;
     case 'call': {
-      const amount = Math.min((state.currentBet) - (player?.currentBet ?? 0), player?.chips ?? 0);
+      const amount = Math.min((bettingState.currentBet) - (player?.currentBet ?? 0), player?.chips ?? 0);
       logEntry = `${playerName} called ${amount} chip(s)`;
       break;
     }
-    case 'raise':
-      logEntry = `${playerName} raised to ${action.amount}`;
-      break;
-    case 'fold':
-      logEntry = `${playerName} folded`;
-      break;
+    case 'raise': logEntry = `${playerName} raised to ${action.amount}`; break;
+    case 'fold':  logEntry = `${playerName} folded`; break;
   }
 
-  const { state: next, roundComplete } = applyBettingAction(state, action);
-  const nextWithLog = appendLog(next, logEntry!);
+  const { state: next, roundComplete } = applyBettingAction(bettingState, action);
+  const withLog = appendLog(next, logEntry!) as BettingState;
 
   if (!roundComplete) {
-    gameState.set(nextWithLog);
+    gameState.set(withLog);
     return;
   }
 
-  const activePlayers = nextWithLog.players.filter((p) => !p.folded);
-  if (activePlayers.length <= 1) {
-    const resultState: GameState = { ...nextWithLog, phase: 'results' };
-    roundResult.set(resolveRound(resultState));
-    gameState.set(resultState);
-    return;
-  }
-
-  const nextPhase = state.phase === 'betting-1' ? 'dealing-2' : 'high-low-bet';
-  gameState.set(resetBettingRound(nextWithLog, nextPhase));
+  gameState.set(advanceFromBetting(withLog));
 }
 
 // ─── Calculation ──────────────────────────────────────────────────────────────
 
-/**
- * Validate an equation for a player for the given target (low or high) and store
- * the result. Returns an error string or null on success.
- */
-export function submitEquation(
-  playerId: string,
-  target: 'low' | 'high',
-  expression: string,
-): string | null {
+export function submitEquation(playerId: string, target: 'low' | 'high', expression: string): string | null {
   if (get(networkMode) === 'peer') {
     peerNet?.send({ type: 'action', payload: { name: 'submitEquation', args: [playerId, target, expression] } });
-    // Optimistically return null; the host will validate and broadcast the real state
     return null;
   }
   const state = get(gameState);
-  if (!state) return 'No game in progress';
+  if (!state || state.phase !== 'calculation') return 'No calculation phase active';
 
-  const player = state.players.find((p) => p.id === playerId);
+  const calcState = state as CalculationState;
+  const player = calcState.players.find((p) => p.id === playerId);
   if (!player) return 'Player not found';
 
-  const allCards = [
-    ...(player.secretCard ? [player.secretCard] : []),
-    ...player.faceUpCards,
-    ...player.personalOperators,
-  ];
-
+  const allCards = [player.secretCard, ...player.faceUpCards, ...player.personalOperators];
   const result = evaluateEquation(expression, allCards);
   if (!result.ok) return result.error;
 
-  const low    = target === 'low'  ? result.value      : player.lowResult;
-  const high   = target === 'high' ? result.value      : player.highResult;
-  const lowEq  = target === 'low'  ? expression        : player.lowEquation;
-  const highEq = target === 'high' ? expression        : player.highEquation;
+  const low    = target === 'low'  ? result.value    : player.lowResult;
+  const high   = target === 'high' ? result.value    : player.highResult;
+  const lowEq  = target === 'low'  ? expression      : player.lowEquation;
+  const highEq = target === 'high' ? expression      : player.highEquation;
 
-  const updated = recordEquationResults(state, playerId, low, high, lowEq, highEq);
-  const playerName = player.name;
-  const label = target === 'low' ? 'low' : 'high';
-  gameState.set(appendLog(updated, `${playerName} submitted their ${label} equation`));
+  const updated = recordEquationResults(calcState, playerId, low, high, lowEq, highEq);
+  gameState.set(appendLog(updated, `${player.name} submitted their ${target} equation`));
   return null;
 }
 
-/** Clear a previously submitted equation so the player can revise it. */
 export function unsubmitEquation(playerId: string, target: 'low' | 'high'): void {
   if (get(networkMode) === 'peer') {
     peerNet?.send({ type: 'action', payload: { name: 'unsubmitEquation', args: [playerId, target] } });
     return;
   }
   const state = get(gameState);
-  if (!state) return;
-  const player = state.players.find((p) => p.id === playerId);
+  if (!state || state.phase !== 'calculation') return;
+
+  const calcState = state as CalculationState;
+  const player = calcState.players.find((p) => p.id === playerId);
   if (!player) return;
 
   const low    = target === 'low'  ? null : player.lowResult;
@@ -328,9 +292,8 @@ export function unsubmitEquation(playerId: string, target: 'low' | 'high'): void
   const lowEq  = target === 'low'  ? null : player.lowEquation;
   const highEq = target === 'high' ? null : player.highEquation;
 
-  const updated = recordEquationResults(state, playerId, low, high, lowEq, highEq);
-  const label = target === 'low' ? 'low' : 'high';
-  gameState.set(appendLog(updated, `${player.name} retracted their ${label} equation`));
+  const updated = recordEquationResults(calcState, playerId, low, high, lowEq, highEq);
+  gameState.set(appendLog(updated, `${player.name} retracted their ${target} equation`));
 }
 
 export function doAdvanceToBetting2(): void {
@@ -338,71 +301,60 @@ export function doAdvanceToBetting2(): void {
     peerNet?.send({ type: 'action', payload: { name: 'doAdvanceToBetting2' } });
     return;
   }
-  gameState.update((s) => (s ? resetBettingRound(s, 'betting-2') : null));
+  const state = get(gameState);
+  if (!state || state.phase !== 'calculation') return;
+  const calcState = state as CalculationState;
+  const firstActive = calcState.players.findIndex((p) => !p.folded);
+  const betting2State = {
+    ...calcState,
+    phase: 'betting-2' as const,
+    players: calcState.players.map((p) => ({ ...p, currentBet: 0 })),
+    currentBet: 0,
+    activePlayerIndex: firstActive === -1 ? 0 : firstActive,
+    bettingActionsThisRound: 0,
+  };
+  gameState.set(betting2State);
 }
 
 // ─── High/Low Bet ─────────────────────────────────────────────────────────────
 
-/**
- * Internal helper: record one player's choice and, if everyone has now chosen,
- * resolve the round and advance to results.
- */
-function applyOneChoice(state: GameState, playerId: string, choice: 'high' | 'low' | 'swing'): void {
+function applyOneChoice(state: HighLowBetState, playerId: string, choice: 'high' | 'low' | 'swing'): void {
   const playerName = state.players.find((p) => p.id === playerId)?.name ?? playerId;
   const { state: next, allChosen } = recordBetChoice(state, playerId, choice);
-  const withLog = appendLog(next, `${playerName} chose ${choice}`);
-  if (allChosen) {
-    const resultsState = { ...withLog, phase: 'results' as const };
-    roundResult.set(resolveRound(resultsState));
-    gameState.set(resultsState);
-  } else {
-    gameState.set(withLog);
-  }
+  const withLog = appendLog(next, `${playerName} chose ${choice}`) as HighLowBetState;
+  gameState.set(allChosen ? advanceFromHighLowBet(withLog) : withLog);
 }
 
-/**
- * Submit a single player's bet choice.  Used in networked play where each
- * client only controls their own player.
- *
- * In peer mode the action is forwarded to the host (with the player ID
- * included so the host knows whose choice it is).
- */
 export function submitMyBetChoice(choice: 'high' | 'low' | 'swing'): void {
   const pid = get(localPlayerId);
-  const mode = get(networkMode);
-  console.log('[submitMyBetChoice] choice=%s pid=%s mode=%s', choice, pid, mode);
-  if (!pid) { console.warn('[submitMyBetChoice] no localPlayerId — aborting'); return; }
-  if (mode === 'peer') {
+  if (!pid) return;
+  if (get(networkMode) === 'peer') {
     peerNet?.send({ type: 'action', payload: { name: 'submitMyBetChoice', args: [pid, choice] } });
     return;
   }
   const state = get(gameState);
-  if (!state) { console.warn('[submitMyBetChoice] no gameState — aborting'); return; }
-  applyOneChoice(state, pid, choice);
+  if (!state || state.phase !== 'high-low-bet') return;
+  applyOneChoice(state as HighLowBetState, pid, choice);
 }
 
-export function doSubmitBetChoices(choices: Map<string, Player['betChoice']>): void {
+export function doSubmitBetChoices(choices: Map<string, DealtPlayer['betChoice']>): void {
   if (get(networkMode) === 'peer') {
     const obj = Object.fromEntries(choices) as Record<string, 'high' | 'low' | 'swing' | null>;
     peerNet?.send({ type: 'action', payload: { name: 'doSubmitBetChoices', args: [obj] } });
     return;
   }
   const state = get(gameState);
-  if (!state) return;
-  const withChoices = applyBetChoices(state, choices);
+  if (!state || state.phase !== 'high-low-bet') return;
+  const hlState = state as HighLowBetState;
+  const withChoices = applyBetChoices(hlState, choices);
   const entries = [...choices.entries()]
-    .map(([id, c]) => {
-      const name = state.players.find((p) => p.id === id)?.name ?? id;
-      return `${name} chose ${c}`;
-    })
+    .map(([id, c]) => `${hlState.players.find((p) => p.id === id)?.name ?? id} chose ${c}`)
     .join('; ');
-  const withLog = appendLog(withChoices, entries);
-  const result = resolveRound(withLog);
-  roundResult.set(result);
-  gameState.set(withLog);
+  const withLog = appendLog(withChoices, entries) as HighLowBetState;
+  gameState.set(advanceFromHighLowBet(withLog));
 }
 
-// ─── Next round ───────────────────────────────────────────────────────────────
+// ─── Next round / play again ──────────────────────────────────────────────────
 
 export function doNextRound(): void {
   if (get(networkMode) === 'peer') {
@@ -410,91 +362,46 @@ export function doNextRound(): void {
     return;
   }
   const state = get(gameState);
-  if (!state) return;
-  const result = get(roundResult);
-  const afterPayout = result ? applyPayouts(state, result) : state;
-
-  const { gameOver, winnerId } = checkGameOver(afterPayout);
-  if (gameOver) {
-    roundResult.set(null);
-    gameState.set({ ...afterPayout, phase: 'game-over', winnerId });
-    return;
-  }
-
-  roundResult.set(null);
-  gameState.set(startRound(afterPayout));
+  if (!state || state.phase !== 'results') return;
+  gameState.set(advanceFromResults(state as ResultsState));
 }
 
-// ─── Play again ───────────────────────────────────────────────────────────────
-
-/** Reset state back to the setup screen so players can start a new game. */
 export function doPlayAgain(): void {
-  // All clients reset locally — the game is finished and no further sync needed.
-  roundResult.set(null);
+  peerPlayerIndex.clear();
   gameState.set(null);
 }
 
 // ─── Networking setup ─────────────────────────────────────────────────────────
 
-/**
- * Initialise host mode and generate a WebRTC offer for one peer.
- * `peerId` is an arbitrary label (e.g. "peer-1") used to identify the
- * connection slot; it does not need to match any in-game player name.
- *
- * Returns the offer blob — a base-64 string the host shares out-of-band.
- */
 export async function setupAsHost(peerId: string): Promise<string> {
   if (!hostNet) {
     hostNet = new HostNetwork();
     networkMode.set('host');
-    myPlayerIndex.set(0); // host is always slot 0
-    // Reset to just the host's slot; peer slots are added as peers connect.
+    myPlayerIndex.set(0);
     lobbyState.update((s) => ({ ...s, players: [{ name: '' }] }));
 
-    hostNet.onMessage = (_pid, msg) => {
-      applyPeerAction(msg.payload);
-    };
+    hostNet.onMessage = (_pid, msg) => { applyPeerAction(msg.payload); };
 
-    // When a peer's channel opens: assign them a lobby slot and sync state.
     hostNet.onConnected = (pid) => {
-      // Add a new slot for this peer; the subscription will broadcast the lobby update.
-      lobbyState.update((ls) => ({
-        ...ls,
-        players: [...ls.players, { name: '' }],
-      }));
+      lobbyState.update((ls) => ({ ...ls, players: [...ls.players, { name: '' }] }));
       const currentLobby = get(lobbyState);
       const peerIndex = currentLobby.players.length - 1;
-
+      peerPlayerIndex.set(pid, peerIndex);
       hostNet!.send(pid, { type: 'slotAssignment', payload: { playerIndex: peerIndex } });
-      // Lobby is broadcast automatically via the subscription, but we also send
-      // it directly in case the subscription fired before this peer was connected.
       hostNet!.send(pid, { type: 'lobby', payload: currentLobby });
-
-      // Sync in-progress game state if the game has already started.
       const s = get(gameState);
-      const r = get(roundResult);
       const pd = get(pendingDecision);
       if (s)  hostNet!.send(pid, { type: 'state', payload: s });
-      if (r)  hostNet!.send(pid, { type: 'roundResult', payload: serializeRoundResult(r) });
       if (pd) hostNet!.send(pid, { type: 'pendingDecision', payload: { player: pd.player } });
     };
   }
-
   return hostNet.createOffer(peerId);
 }
 
-/**
- * Apply a peer's answer blob for an already-generated offer slot.
- * Call this after the peer has shared their answer back to the host.
- */
 export async function acceptPeerAnswer(peerId: string, answerBlob: string): Promise<void> {
   await hostNet?.acceptAnswer(peerId, answerBlob);
 }
 
-/**
- * Initialise peer mode and connect to the host using their offer blob.
- * Returns the answer blob — a base-64 string the peer shares back to the host.
- */
 export async function setupAsPeer(offerBlob: string): Promise<string> {
   peerNet = new PeerNetwork();
   networkMode.set('peer');
@@ -503,20 +410,13 @@ export async function setupAsPeer(offerBlob: string): Promise<string> {
     switch (msg.type) {
       case 'state':
         gameState.set(msg.payload);
-        // Auto-assign localPlayerId the first time a game state arrives.
         if (!get(localPlayerId)) {
           const idx = get(myPlayerIndex);
           if (idx !== null) localPlayerId.set(`player-${idx}`);
         }
         break;
-
-      case 'roundResult':
-        roundResult.set(msg.payload ? deserializeRoundResult(msg.payload) : null);
-        break;
-
       case 'pendingDecision':
         if (msg.payload) {
-          // Create a synthetic PendingDecision whose resolve sends a network action.
           pendingDecision.set({
             player: msg.payload.player,
             resolve: (d) => {
@@ -527,11 +427,9 @@ export async function setupAsPeer(offerBlob: string): Promise<string> {
           pendingDecision.set(null);
         }
         break;
-
       case 'lobby':
         lobbyState.set(msg.payload);
         break;
-
       case 'slotAssignment':
         myPlayerIndex.set(msg.payload.playerIndex);
         break;
@@ -541,59 +439,32 @@ export async function setupAsPeer(offerBlob: string): Promise<string> {
   return peerNet.connect(offerBlob);
 }
 
-/** Returns the IDs of all peers with an open data channel. */
 export function getConnectedPeerIds(): string[] {
   return hostNet?.getConnectedPeerIds() ?? [];
 }
 
 // ─── Host-side peer action dispatcher ────────────────────────────────────────
 
-/** Dispatch a serialised peer action to the corresponding local function. */
 function applyPeerAction(action: SerializedAction): void {
-  console.log('[applyPeerAction]', action.name, 'args' in action ? action.args : '');
   switch (action.name) {
-    case 'initGame':
-      initGame(...action.args);
-      break;
-    case 'doForcedBets':
-      doForcedBets();
-      break;
-    case 'doDeal':
-      void doDeal(action.args[0]);
-      break;
-    case 'doBettingAction':
-      doBettingAction(action.args[0]);
-      break;
-    case 'submitEquation':
-      submitEquation(action.args[0], action.args[1], action.args[2]);
-      break;
-    case 'unsubmitEquation':
-      unsubmitEquation(action.args[0], action.args[1]);
-      break;
-    case 'doAdvanceToBetting2':
-      doAdvanceToBetting2();
-      break;
+    case 'initGame':           initGame(...action.args); break;
+    case 'doForcedBets':       doForcedBets(); break;
+    case 'doDeal':             doDeal(action.args[0]); break;
+    case 'doBettingAction':    doBettingAction(action.args[0]); break;
+    case 'submitEquation':     submitEquation(action.args[0], action.args[1], action.args[2]); break;
+    case 'unsubmitEquation':   unsubmitEquation(action.args[0], action.args[1]); break;
+    case 'doAdvanceToBetting2': doAdvanceToBetting2(); break;
     case 'doSubmitBetChoices': {
-      const obj = action.args[0];
-      const map = new Map(
-        Object.entries(obj) as [string, Player['betChoice']][],
-      );
+      const map = new Map(Object.entries(action.args[0]) as [string, DealtPlayer['betChoice']][]);
       doSubmitBetChoices(map);
       break;
     }
-    case 'doNextRound':
-      doNextRound();
-      break;
-    case 'resolveDecision':
-      resolveDecision(action.args[0]);
-      break;
-    case 'updateLobbyName':
-      updateLobbyName(action.args[0], action.args[1]);
-      break;
+    case 'doNextRound':        doNextRound(); break;
+    case 'resolveDecision':    resolveDecision(action.args[0]); break;
+    case 'updateLobbyName':    updateLobbyName(action.args[0], action.args[1]); break;
     case 'submitMyBetChoice': {
-      const [playerId, choice] = action.args;
       const state = get(gameState);
-      if (state) applyOneChoice(state, playerId, choice);
+      if (state?.phase === 'high-low-bet') applyOneChoice(state as HighLowBetState, action.args[0], action.args[1]);
       break;
     }
   }

@@ -1,19 +1,18 @@
 <script lang="ts">
   import { onDestroy } from 'svelte';
   import { gameState, submitEquation, unsubmitEquation, doAdvanceToBetting2, localPlayerId, networkMode } from '../gameStore';
-  import type { Card, Player } from '../../src/types';
+  import type { Card, DealtPlayer } from '../../src/types';
 
   // ─── Token helpers ────────────────────────────────────────────────────────
 
-  function getTokens(player: Player): Card[] {
-    return [
-      ...(player.secretCard ? [player.secretCard] : []),
-      ...player.faceUpCards,
-      ...player.personalOperators,
-    ];
+  const calcPlayers = $derived(
+    ($gameState?.phase === 'calculation' ? $gameState.players : []) as DealtPlayer[],
+  );
+
+  function getTokens(player: DealtPlayer): Card[] {
+    return [player.secretCard, ...player.faceUpCards, ...player.personalOperators];
   }
 
-  /** Unique label for a token — appends [n] when duplicates exist in the hand. */
   function tokenLabel(card: Card, idx: number, all: Card[]): string {
     const base = card.kind === 'number'
       ? `${card.value} (${card.suit})`
@@ -58,9 +57,8 @@
     return { slots: Array<number | null>(n).fill(null), error: null, submitted: false };
   }
 
-  // Initialise state for any player not yet seen (without resetting existing ones).
   $effect(() => {
-    for (const p of $gameState?.players ?? []) {
+    for (const p of calcPlayers) {
       if (p.folded || p.id in playerStates) continue;
       const n = getTokens(p).length;
       playerStates[p.id] = { low: makeEquationState(n), high: makeEquationState(n) };
@@ -100,7 +98,7 @@
 
   function validate(playerId: string, target: 'low' | 'high'): void {
     const eq = playerStates[playerId]?.[target];
-    const player = $gameState?.players.find((p) => p.id === playerId);
+    const player = calcPlayers.find((p) => p.id === playerId);
     if (!eq || !player) return;
 
     const tokens = getTokens(player);
@@ -145,7 +143,7 @@
   }
 
   function debugFillAll(): void {
-    for (const player of $gameState?.players ?? []) {
+    for (const player of calcPlayers) {
       if (player.folded) continue;
       const tokens = getTokens(player);
       const expr = buildDebugExpression(tokens);
@@ -159,7 +157,7 @@
 
   // ─── Timer ────────────────────────────────────────────────────────────────
 
-  let remaining = $state($gameState?.calculationTimeLimit ?? 90);
+  let remaining = $state(($gameState?.phase === 'calculation' ? $gameState.calculationTimeLimit : null) ?? 90);
   const interval = setInterval(() => { remaining = Math.max(0, remaining - 1); }, 1000);
   onDestroy(() => clearInterval(interval));
 </script>
@@ -175,7 +173,7 @@
     √ is disabled in the last slot.
   </p>
 
-  {#each $gameState?.players ?? [] as player}
+  {#each calcPlayers as player}
     {#if !player.folded}
       {@const isMe = !$localPlayerId || player.id === $localPlayerId}
       {@const tokens = getTokens(player)}
@@ -261,7 +259,7 @@
   {/each}
 
   {#if $networkMode !== 'peer'}
-    {@const allSubmitted = ($gameState?.players ?? [])
+    {@const allSubmitted = calcPlayers
       .filter(p => !p.folded)
       .every(p => p.lowEquation !== null && p.highEquation !== null)}
     <button type="button" onclick={doAdvanceToBetting2} disabled={!allSubmitted}>

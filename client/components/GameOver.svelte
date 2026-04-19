@@ -1,10 +1,10 @@
 <script lang="ts">
   import { gameState, doPlayAgain } from '../gameStore';
 
+  const winnerId = $derived($gameState?.phase === 'game-over' ? $gameState.winnerId : null);
+
   const winner = $derived(
-    $gameState?.winnerId
-      ? $gameState.players.find((p) => p.id === $gameState?.winnerId) ?? null
-      : null,
+    winnerId ? $gameState?.players.find((p) => p.id === winnerId) ?? null : null,
   );
 
   const sorted = $derived(
@@ -35,7 +35,7 @@
           <td>{i + 1}</td>
           <td>
             {player.name}
-            {#if player.id === $gameState?.winnerId} 🏆{/if}
+            {#if player.id === winnerId} 🏆{/if}
           </td>
           <td>{player.chips}</td>
         </tr>

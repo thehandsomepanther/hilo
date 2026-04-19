@@ -3,27 +3,34 @@
 
   let raiseAmount = $state(0);
 
+  // gameState is BettingState when this component is mounted
+  const bettingState = $derived(
+    $gameState?.phase === 'betting-1' || $gameState?.phase === 'betting-2' ? $gameState : null,
+  );
+
   const activePlayer = $derived(
-    $gameState?.players[$gameState.activePlayerIndex] ?? null,
+    bettingState ? bettingState.players[bettingState.activePlayerIndex] ?? null : null,
   );
 
   const canCheck = $derived(
-    activePlayer !== null &&
-    ($gameState?.currentBet ?? 0) <= activePlayer.currentBet,
+    activePlayer !== null && (bettingState?.currentBet ?? 0) <= activePlayer.currentBet,
   );
 
   const callAmount = $derived(
     activePlayer
-      ? Math.min(
-          ($gameState?.currentBet ?? 0) - activePlayer.currentBet,
-          activePlayer.chips,
-        )
+      ? Math.min((bettingState?.currentBet ?? 0) - activePlayer.currentBet, activePlayer.chips)
+      : 0,
+  );
+
+  /** Maximum any player can be raised to: the smallest effective stack among active players. */
+  const maxRaise = $derived(
+    bettingState
+      ? Math.min(...bettingState.players.filter((p) => !p.folded).map((p) => p.chips + p.currentBet))
       : 0,
   );
 
   $effect(() => {
-    // Default raise to one above current bet when the active player changes
-    raiseAmount = ($gameState?.currentBet ?? 0) + 1;
+    raiseAmount = (bettingState?.currentBet ?? 0) + 1;
   });
 
   function raise() {
@@ -34,7 +41,7 @@
 <section>
   <h2>Betting — Phase {$gameState?.phase === 'betting-1' ? 1 : 2}</h2>
 
-  <p>Pot: <strong>{$gameState?.pot}</strong> chips | Current bet: <strong>{$gameState?.currentBet}</strong></p>
+  <p>Pot: <strong>{bettingState?.pot}</strong> chips | Current bet: <strong>{bettingState?.currentBet}</strong></p>
 
   {#if activePlayer}
     {@const isMyTurn = !$localPlayerId || activePlayer.id === $localPlayerId}
@@ -58,14 +65,14 @@
           <input
             type="number"
             bind:value={raiseAmount}
-            min={($gameState?.currentBet ?? 0) + 1}
-            max={activePlayer.chips + activePlayer.currentBet}
+            min={(bettingState?.currentBet ?? 0) + 1}
+            max={maxRaise}
           />
         </label>
         <button
           type="button"
           onclick={raise}
-          disabled={raiseAmount <= ($gameState?.currentBet ?? 0)}
+          disabled={raiseAmount <= (bettingState?.currentBet ?? 0)}
         >
           Raise
         </button>

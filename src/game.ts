@@ -1,5 +1,12 @@
 import { buildDeck, buildPersonalOperators, shuffle, drawCard, drawNumberCard } from './deck';
-import { GameState, Player, MultiplicationDecision, Card } from './types';
+import {
+  GameState, Player, DealtPlayer, UndealPlayer,
+  MultiplicationDecision, Card, RoundResult,
+  SetupState, ForcedBetState, Dealing1State, Dealing2State,
+  Betting1State, Betting2State, BettingState,
+  CalculationState, HighLowBetState, ResultsState, GameOverState,
+} from './types';
+import { resolveRound, applyPayouts } from './results';
 
 // ─── Setup ────────────────────────────────────────────────────────────────────
 
@@ -8,23 +15,18 @@ export function createGame(
   startingChips = 50,
   forcedBetAmount = 1,
   calculationTimeLimit = 90,
-): GameState {
+): SetupState {
   if (playerNames.length < 2) throw new Error('At least 2 players required');
 
-  const players: Player[] = playerNames.map((name, i) => ({
+  const players: UndealPlayer[] = playerNames.map((name, i) => ({
     id: `player-${i}`,
     name,
     chips: startingChips,
     personalOperators: buildPersonalOperators(),
-    secretCard: null,
-    faceUpCards: [],
     currentBet: 0,
     folded: false,
-    betChoice: null,
-    lowEquation: null,
-    highEquation: null,
-    lowResult: null,
-    highResult: null,
+    secretCard: null,
+    faceUpCards: [],
   }));
 
   return {
@@ -32,90 +34,78 @@ export function createGame(
     players,
     deck: shuffle(buildDeck()),
     pot: 0,
-    currentBet: 0,
     forcedBetAmount,
-    activePlayerIndex: 0,
     calculationTimeLimit,
     round: 0,
-    bettingActionsThisRound: 0,
-    winnerId: null,
     log: [],
   };
 }
 
 // ─── Round initialisation ────────────────────────────────────────────────────
 
-/** Reset per-round player fields and re-shuffle a fresh deck. */
-export function startRound(state: GameState): GameState {
-  const players: Player[] = state.players.map((p) => ({
-    ...p,
-    personalOperators: buildPersonalOperators(),
-    secretCard: null,
-    faceUpCards: [],
-    currentBet: 0,
-    folded: false,
-    betChoice: null,
-    lowEquation: null,
-    highEquation: null,
-    lowResult: null,
-    highResult: null,
-  }));
-
+/**
+ * Start a new round from a SetupState (returned by `applyPayouts` or
+ * `createGame`).  Players are already reset to UndealPlayer by `applyPayouts`;
+ * this just shuffles the deck, increments the round counter, and clears the log.
+ *
+ * Crucially, `pot` is NOT reset here — rollover chips from the previous round
+ * (already set in SetupState by `applyPayouts`) carry into the new round.
+ */
+export function startRound(state: SetupState): ForcedBetState {
   return {
     ...state,
     phase: 'forced-bet',
-    players,
     deck: shuffle(buildDeck()),
-    currentBet: 0,
-    activePlayerIndex: 0,
     round: state.round + 1,
-    bettingActionsThisRound: 0,
     log: [],
   };
 }
 
-// ─── Forced Bet ──────────────────────────────────────────────────────────────
+// ─── Forced Bet ───────────────────────────────────────────────────────────────
 
-/**
- * Collect the forced bet from all players.
- * Players with fewer chips than the forced amount go all-in.
- */
-export function collectForcedBets(state: GameState): GameState {
+export function collectForcedBets(state: ForcedBetState): Dealing1State {
   let pot = state.pot;
-  const players: Player[] = state.players.map((p) => {
+  const players: UndealPlayer[] = state.players.map((p) => {
     const bet = Math.min(p.chips, state.forcedBetAmount);
     pot += bet;
     return { ...p, chips: p.chips - bet, currentBet: bet };
   });
-
-  return { ...state, phase: 'dealing-1', players, pot, currentBet: state.forcedBetAmount };
+  return { ...state, phase: 'dealing-1', players, pot };
 }
 
 // ─── Dealing helpers ──────────────────────────────────────────────────────────
 
-/**
- * Deal the secret (face-down) number card to every active player.
- * Non-number draws are discarded and re-drawn.
- */
-export function dealSecretCards(state: GameState): GameState {
+/** Deal the secret face-down number card to every non-folded player. */
+export function dealSecretCards(state: Dealing1State): Dealing1State {
   let deck = [...state.deck];
   const players: Player[] = state.players.map((p) => {
     if (p.folded) return p;
     const result = drawNumberCard(deck);
     deck = result.remaining;
-    return { ...p, secretCard: result.card };
+    // Transition UndealPlayer → partial DealtPlayer (faceUpCards still empty)
+    const dealt: DealtPlayer = {
+      id: p.id,
+      name: p.name,
+      chips: p.chips,
+      personalOperators: p.personalOperators,
+      currentBet: p.currentBet,
+      folded: p.folded,
+      secretCard: result.card,
+      faceUpCards: [],
+      betChoice: null,
+      lowEquation: null,
+      highEquation: null,
+      lowResult: null,
+      highResult: null,
+    };
+    return dealt;
   });
   return { ...state, players, deck };
 }
 
 /**
- * Deal two face-up cards to a single player, applying √/× rules.
- *
- * For × cards the caller supplies a `getMultiplicationDecision` callback so
- * the UI/engine layer can request the player's choice and pass it in.
- * This function is pure — all side-effects are in the callback.
- *
- * Returns the updated player and the remaining deck.
+ * Deal two face-up cards to one player, applying √/× rules.
+ * The callback is synchronous in src/; the async UI bridge lives in client/dealing.ts.
  */
 export function dealFaceUpCards(
   player: Player,
@@ -123,13 +113,9 @@ export function dealFaceUpCards(
   getMultiplicationDecision: (player: Player, deck: Card[]) => MultiplicationDecision,
 ): { player: Player; deck: Card[] } {
   let currentDeck = [...deck];
-  const faceUpCards: Card[] = [...player.faceUpCards];
+  const faceUpCards: Card[] = 'faceUpCards' in player ? [...player.faceUpCards] : [];
   const personalOperators = [...player.personalOperators];
 
-  /**
-   * Draw one face-up card and apply special rules.
-   * Returns true if a symbol card was placed (√ or accepted ×).
-   */
   const drawOne = (): boolean => {
     const { card, remaining } = drawCard(currentDeck);
     currentDeck = remaining;
@@ -138,47 +124,34 @@ export function dealFaceUpCards(
       faceUpCards.push(card);
       return false;
     }
-
-    // √ card
     if (card.operator === '√') {
       faceUpCards.push(card);
-      // Always accompanied by an additional number card
       const numResult = drawNumberCard(currentDeck);
       currentDeck = numResult.remaining;
       faceUpCards.push(numResult.card);
       return true;
     }
-
-    // × card
     if (card.operator === '×') {
-      const currentPlayer: Player = { ...player, faceUpCards: [...faceUpCards], personalOperators: [...personalOperators] };
-      const decision = getMultiplicationDecision(currentPlayer, currentDeck);
-
+      const snap = { ...player, faceUpCards: [...faceUpCards], personalOperators: [...personalOperators] } as Player;
+      const decision = getMultiplicationDecision(snap, currentDeck);
       if (decision.accept) {
         const idx = personalOperators.findIndex((op) => op.operator === decision.discard);
-        if (idx === -1) throw new Error(`Operator ${decision.discard} not found in hand`);
+        if (idx === -1) throw new Error(`Operator ${decision.discard} not found`);
         personalOperators.splice(idx, 1);
         faceUpCards.push(card);
       }
-      // Whether accepted or declined, player always gets an additional number card
       const numResult = drawNumberCard(currentDeck);
       currentDeck = numResult.remaining;
       faceUpCards.push(numResult.card);
       return decision.accept;
     }
-
-    // Any other operator card in the face-up draw is treated as a number draw
-    // (shouldn't occur with standard deck, but defensively skip it)
     const numResult = drawNumberCard(currentDeck);
     currentDeck = numResult.remaining;
     faceUpCards.push(numResult.card);
     return false;
   };
 
-  // First face-up draw
   const firstWasSymbol = drawOne();
-
-  // Second face-up draw: if first was a symbol, must force a number
   if (firstWasSymbol) {
     const numResult = drawNumberCard(currentDeck);
     currentDeck = numResult.remaining;
@@ -187,21 +160,35 @@ export function dealFaceUpCards(
     drawOne();
   }
 
-  return {
-    player: { ...player, faceUpCards, personalOperators },
-    deck: currentDeck,
+  // Ensure result is a full DealtPlayer (secretCard was set by dealSecretCards)
+  const secretCard = 'secretCard' in player && player.secretCard !== null
+    ? player.secretCard
+    : (() => { throw new Error('dealFaceUpCards called before dealSecretCards'); })();
+
+  const result: DealtPlayer = {
+    id: player.id,
+    name: player.name,
+    chips: player.chips,
+    personalOperators,
+    currentBet: player.currentBet,
+    folded: player.folded,
+    secretCard,
+    faceUpCards,
+    betChoice: null,
+    lowEquation: null,
+    highEquation: null,
+    lowResult: null,
+    highResult: null,
   };
+  return { player: result, deck: currentDeck };
 }
 
-/**
- * Deal one additional face-up card per active player (Dealing Phase 2),
- * following the same √/× rules.
- */
+/** Deal one additional face-up card per active player (Dealing Phase 2). */
 export function dealOneMoreFaceUp(
-  player: Player,
+  player: DealtPlayer,
   deck: Card[],
-  getMultiplicationDecision: (player: Player, deck: Card[]) => MultiplicationDecision,
-): { player: Player; deck: Card[] } {
+  getMultiplicationDecision: (player: DealtPlayer, deck: Card[]) => MultiplicationDecision,
+): { player: DealtPlayer; deck: Card[] } {
   let currentDeck = [...deck];
   const faceUpCards: Card[] = [...player.faceUpCards];
   const personalOperators = [...player.personalOperators];
@@ -217,11 +204,11 @@ export function dealOneMoreFaceUp(
     currentDeck = numResult.remaining;
     faceUpCards.push(numResult.card);
   } else if (card.operator === '×') {
-    const currentPlayer: Player = { ...player, faceUpCards: [...faceUpCards], personalOperators: [...personalOperators] };
-    const decision = getMultiplicationDecision(currentPlayer, currentDeck);
+    const snap: DealtPlayer = { ...player, faceUpCards: [...faceUpCards], personalOperators: [...personalOperators] };
+    const decision = getMultiplicationDecision(snap, currentDeck);
     if (decision.accept) {
       const idx = personalOperators.findIndex((op) => op.operator === decision.discard);
-      if (idx === -1) throw new Error(`Operator ${decision.discard} not found in hand`);
+      if (idx === -1) throw new Error(`Operator ${decision.discard} not found`);
       personalOperators.splice(idx, 1);
       faceUpCards.push(card);
     }
@@ -229,26 +216,18 @@ export function dealOneMoreFaceUp(
     currentDeck = numResult.remaining;
     faceUpCards.push(numResult.card);
   } else {
-    // Other operator — replace with a number
     const numResult = drawNumberCard(currentDeck);
     currentDeck = numResult.remaining;
     faceUpCards.push(numResult.card);
   }
 
-  return {
-    player: { ...player, faceUpCards, personalOperators },
-    deck: currentDeck,
-  };
+  return { player: { ...player, faceUpCards, personalOperators }, deck: currentDeck };
 }
 
-/**
- * Run Dealing Phase 1 for all active players.
- * Deals 1 secret card + 2 face-up cards each.
- */
 export function runDealingPhase1(
-  state: GameState,
+  state: Dealing1State,
   getMultiplicationDecision: (player: Player, deck: Card[]) => MultiplicationDecision,
-): GameState {
+): Betting1State {
   let s = dealSecretCards(state);
   let deck = [...s.deck];
   const players: Player[] = s.players.map((p) => {
@@ -257,19 +236,24 @@ export function runDealingPhase1(
     deck = result.deck;
     return result.player;
   });
-  return { ...s, phase: 'betting-1', players, deck };
+  const firstActive = players.findIndex((p) => !p.folded);
+  return {
+    ...s,
+    phase: 'betting-1',
+    players: players as DealtPlayer[],
+    deck,
+    currentBet: 0,
+    activePlayerIndex: firstActive === -1 ? 0 : firstActive,
+    bettingActionsThisRound: 0,
+  };
 }
 
-/**
- * Run Dealing Phase 2 for all active players.
- * Deals 1 additional face-up card each.
- */
 export function runDealingPhase2(
-  state: GameState,
-  getMultiplicationDecision: (player: Player, deck: Card[]) => MultiplicationDecision,
-): GameState {
+  state: Dealing2State,
+  getMultiplicationDecision: (player: DealtPlayer, deck: Card[]) => MultiplicationDecision,
+): CalculationState {
   let deck = [...state.deck];
-  const players: Player[] = state.players.map((p) => {
+  const players: DealtPlayer[] = state.players.map((p) => {
     if (p.folded) return p;
     const result = dealOneMoreFaceUp(p, deck, getMultiplicationDecision);
     deck = result.deck;
@@ -286,33 +270,24 @@ export type BettingAction =
   | { type: 'check' }
   | { type: 'fold' };
 
-/**
- * Apply a single betting action for the active player.
- * Returns updated state and whether the betting round is complete.
- */
 export function applyBettingAction(
-  state: GameState,
+  state: BettingState,
   action: BettingAction,
-): { state: GameState; roundComplete: boolean } {
-  const players: Player[] = [...state.players];
+): { state: BettingState; roundComplete: boolean } {
+  const players = [...state.players];
   const idx = state.activePlayerIndex;
   const player = players[idx];
   if (!player) throw new Error(`No player at index ${idx}`);
 
   switch (action.type) {
     case 'raise': {
-      if (action.amount <= state.currentBet) {
-        throw new Error('Raise amount must exceed current bet');
-      }
+      if (action.amount <= state.currentBet) throw new Error('Raise must exceed current bet');
       const extra = action.amount - player.currentBet;
       if (extra > player.chips) throw new Error('Not enough chips to raise');
-      const updated: Player = {
-        ...player,
-        chips: player.chips - extra,
-        currentBet: action.amount,
-      };
-      players[idx] = updated;
-      const nextState: GameState = {
+      const minStack = Math.min(...state.players.filter((p) => !p.folded).map((p) => p.chips + p.currentBet));
+      if (action.amount > minStack) throw new Error('Raise exceeds the minimum stack of active players');
+      players[idx] = { ...player, chips: player.chips - extra, currentBet: action.amount };
+      const nextState: BettingState = {
         ...state,
         players,
         pot: state.pot + extra,
@@ -322,17 +297,11 @@ export function applyBettingAction(
       };
       return { state: nextState, roundComplete: isBettingComplete(nextState) };
     }
-
     case 'call': {
       const extra = state.currentBet - player.currentBet;
-      const paid = Math.min(extra, player.chips); // allow all-in
-      const updated: Player = {
-        ...player,
-        chips: player.chips - paid,
-        currentBet: player.currentBet + paid,
-      };
-      players[idx] = updated;
-      const nextState: GameState = {
+      const paid = Math.min(extra, player.chips);
+      players[idx] = { ...player, chips: player.chips - paid, currentBet: player.currentBet + paid };
+      const nextState: BettingState = {
         ...state,
         players,
         pot: state.pot + paid,
@@ -341,12 +310,9 @@ export function applyBettingAction(
       };
       return { state: nextState, roundComplete: isBettingComplete(nextState) };
     }
-
     case 'check': {
-      if (state.currentBet > player.currentBet) {
-        throw new Error('Cannot check when there is an outstanding bet — call or fold');
-      }
-      const nextState: GameState = {
+      if (state.currentBet > player.currentBet) throw new Error('Cannot check — call or fold');
+      const nextState: BettingState = {
         ...state,
         players,
         activePlayerIndex: nextActiveIndex(players, idx),
@@ -354,92 +320,111 @@ export function applyBettingAction(
       };
       return { state: nextState, roundComplete: isBettingComplete(nextState) };
     }
-
     case 'fold': {
-      const updated: Player = { ...player, folded: true };
-      players[idx] = updated;
-      const nextState: GameState = {
+      players[idx] = { ...player, folded: true };
+      const nextState: BettingState = {
         ...state,
         players,
         activePlayerIndex: nextActiveIndex(players, idx),
         bettingActionsThisRound: state.bettingActionsThisRound + 1,
       };
-      const activePlayers = nextState.players.filter((p) => !p.folded);
-      if (activePlayers.length === 1) {
-        return { state: nextState, roundComplete: true };
-      }
       return { state: nextState, roundComplete: isBettingComplete(nextState) };
     }
   }
 }
 
-/**
- * Returns true when all active (non-folded) players have matched the current
- * bet AND every active player has taken at least one action this round.
- * The second condition prevents the round from ending before anyone acts
- * (e.g. right after a resetBettingRound where all bets are 0).
- */
-export function isBettingComplete(state: GameState): boolean {
+export function isBettingComplete(state: BettingState): boolean {
   const active = state.players.filter((p) => !p.folded);
   if (active.length <= 1) return true;
   if (state.bettingActionsThisRound < active.length) return false;
   return active.every((p) => p.currentBet === state.currentBet);
 }
 
-/** Index of the next non-folded player after `currentIdx`. */
-function nextActiveIndex(players: Player[], currentIdx: number): number {
+function nextActiveIndex(players: DealtPlayer[], currentIdx: number): number {
   const n = players.length;
   let i = (currentIdx + 1) % n;
   let iterations = 0;
   while (players[i]?.folded) {
     i = (i + 1) % n;
-    if (++iterations > n) break; // safety — shouldn't happen
+    if (++iterations > n) break;
   }
   return i;
 }
 
+// ─── Phase transitions ────────────────────────────────────────────────────────
+
 /**
- * Reset per-betting-round `currentBet` fields before starting a new betting
- * round (the pot accumulates across rounds; only the per-player bet resets).
+ * Advance past a completed betting round.
+ *
+ * - If only one player remains (all others folded), transitions directly to
+ *   `results` with a `last-player-standing` result.
+ * - Otherwise resets per-round bets and advances to `dealing-2` (after
+ *   betting-1) or `high-low-bet` (after betting-2).
  */
-export function resetBettingRound(state: GameState, nextPhase: GameState['phase']): GameState {
-  const players: Player[] = state.players.map((p) => ({ ...p, currentBet: 0 }));
+export function advanceFromBetting(state: BettingState): Dealing2State | HighLowBetState | ResultsState {
+  const active = state.players.filter((p) => !p.folded);
+
+  if (active.length <= 1) {
+    const winner = active[0];
+    const result: RoundResult = winner
+      ? { kind: 'last-player-standing', winnerId: winner.id, payout: state.pot }
+      : { kind: 'contested', lowWinnerId: null, highWinnerId: null, payouts: { __rollover__: state.pot } };
+    const { activePlayerIndex: _, currentBet: __, bettingActionsThisRound: ___, ...base } = state;
+    return { ...base, phase: 'results', result } as ResultsState;
+  }
+
+  // Reset per-betting-round player bets and counters.
+  const players = state.players.map((p) => ({ ...p, currentBet: 0 }));
   const firstActive = players.findIndex((p) => !p.folded);
-  return {
-    ...state,
-    phase: nextPhase,
-    players,
-    currentBet: 0,
-    activePlayerIndex: firstActive === -1 ? 0 : firstActive,
-    bettingActionsThisRound: 0,
-  };
+  const { activePlayerIndex: _, currentBet: __, bettingActionsThisRound: ___, ...base } = state;
+
+  if (state.phase === 'betting-1') {
+    return { ...base, phase: 'dealing-2', players } satisfies Dealing2State;
+  } else {
+    return { ...base, phase: 'high-low-bet', players } satisfies HighLowBetState;
+  }
+}
+
+/**
+ * Advance from high-low-bet to results by computing the round outcome.
+ */
+export function advanceFromHighLowBet(state: HighLowBetState): ResultsState {
+  const result = resolveRound(state);
+  return { ...state, phase: 'results', result };
+}
+
+/**
+ * Advance from results: apply payouts, then either start the next round
+ * or end the game if only one player still has chips.
+ */
+export function advanceFromResults(state: ResultsState): ForcedBetState | GameOverState {
+  const after = applyPayouts(state); // SetupState
+  const { gameOver, winnerId } = checkGameOver(after);
+  if (gameOver) {
+    return { ...after, phase: 'game-over', winnerId: winnerId! };
+  }
+  return startRound(after);
 }
 
 // ─── High/Low Bet ─────────────────────────────────────────────────────────────
 
-/** Apply all players' bet choices simultaneously and advance to results. */
 export function applyBetChoices(
-  state: GameState,
-  choices: Map<string, Player['betChoice']>,
-): GameState {
-  const players: Player[] = state.players.map((p) => ({
+  state: HighLowBetState,
+  choices: Map<string, DealtPlayer['betChoice']>,
+): HighLowBetState {
+  const players: DealtPlayer[] = state.players.map((p) => ({
     ...p,
     betChoice: choices.get(p.id) ?? p.betChoice,
   }));
-  return { ...state, phase: 'results', players };
+  return { ...state, players };
 }
 
-/**
- * Record a single player's bet choice without advancing the phase.
- * Returns the updated state and whether every active player has now chosen.
- * Used in networked play where choices arrive one at a time.
- */
 export function recordBetChoice(
-  state: GameState,
+  state: HighLowBetState,
   playerId: string,
   choice: 'high' | 'low' | 'swing',
-): { state: GameState; allChosen: boolean } {
-  const players: Player[] = state.players.map((p) =>
+): { state: HighLowBetState; allChosen: boolean } {
+  const players: DealtPlayer[] = state.players.map((p) =>
     p.id === playerId ? { ...p, betChoice: choice } : p,
   );
   const allChosen = players.filter((p) => !p.folded).every((p) => p.betChoice !== null);
@@ -448,43 +433,53 @@ export function recordBetChoice(
 
 // ─── Game-over detection ──────────────────────────────────────────────────────
 
-/**
- * After payouts are applied, check whether the game is over.
- * The game ends when at most one player still has chips.
- *
- * Returns `{ gameOver: true, winnerId }` where `winnerId` is the last player
- * with chips (or, if everyone is at zero, the player with the most chips going
- * into the final round — i.e. the highest chip count in the post-payout state).
- */
-export function checkGameOver(state: GameState): { gameOver: boolean; winnerId: string | null } {
+export function checkGameOver(state: SetupState): { gameOver: boolean; winnerId: string | null } {
   const solvent = state.players.filter((p) => p.chips > 0);
   if (solvent.length > 1) return { gameOver: false, winnerId: null };
-
-  if (solvent.length === 1) {
-    return { gameOver: true, winnerId: solvent[0]!.id };
-  }
-
-  // All players at zero — pick whoever has the most chips (tie goes to first).
-  const best = state.players.reduce<Player | null>(
+  if (solvent.length === 1) return { gameOver: true, winnerId: solvent[0]!.id };
+  const best = state.players.reduce<UndealPlayer | null>(
     (acc, p) => (acc === null || p.chips > acc.chips ? p : acc),
     null,
   );
   return { gameOver: true, winnerId: best?.id ?? null };
 }
 
-/** Store computed equation results for a player. */
+// ─── Equation results ─────────────────────────────────────────────────────────
+
 export function recordEquationResults(
-  state: GameState,
+  state: CalculationState,
   playerId: string,
   lowResult: number | null,
   highResult: number | null,
   lowEquation: string | null,
   highEquation: string | null,
-): GameState {
-  const players: Player[] = state.players.map((p) =>
-    p.id === playerId
-      ? { ...p, lowResult, highResult, lowEquation, highEquation }
-      : p,
+): CalculationState {
+  const players: DealtPlayer[] = state.players.map((p) =>
+    p.id === playerId ? { ...p, lowResult, highResult, lowEquation, highEquation } : p,
   );
   return { ...state, players };
+}
+
+// ─── Betting round reset (used by dealing.ts) ─────────────────────────────────
+
+/**
+ * Reset per-betting-round state when starting a new betting phase.
+ * Used only by the dealing step machine (client/dealing.ts).
+ */
+export function initBettingRound(state: Dealing1State & { players: DealtPlayer[] }, phase: 'betting-1'): Betting1State;
+export function initBettingRound(state: CalculationState, phase: 'betting-2'): Betting2State;
+export function initBettingRound(
+  state: (Dealing1State & { players: DealtPlayer[] }) | CalculationState,
+  phase: 'betting-1' | 'betting-2',
+): Betting1State | Betting2State {
+  const players = state.players.map((p) => ({ ...p, currentBet: 0 }));
+  const firstActive = players.findIndex((p) => !p.folded);
+  return {
+    ...state,
+    phase,
+    players,
+    currentBet: 0,
+    activePlayerIndex: firstActive === -1 ? 0 : firstActive,
+    bettingActionsThisRound: 0,
+  } as Betting1State | Betting2State;
 }

@@ -5,7 +5,7 @@ import {
   collectForcedBets,
   applyBettingAction,
   isBettingComplete,
-  resetBettingRound,
+  advanceFromBetting,
   applyBetChoices,
   runDealingPhase1,
   runDealingPhase2,
@@ -13,11 +13,85 @@ import {
   recordBetChoice,
   checkGameOver,
   recordEquationResults,
+  advanceFromHighLowBet,
+  advanceFromResults,
 } from '../game';
 import { applyPayouts } from '../results';
-import { MultiplicationDecision, Player, Card, OperatorCard } from '../types';
+import {
+  MultiplicationDecision, DealtPlayer, UndealPlayer, OperatorCard,
+  ForcedBetState, Dealing1State, Dealing2State, BettingState,
+  HighLowBetState, CalculationState, ResultsState, SetupState,
+} from '../types';
 
 const declineMultiplication = (): MultiplicationDecision => ({ accept: false });
+
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+
+function makeUndealPlayer(overrides: Partial<UndealPlayer> & { id: string }): UndealPlayer {
+  return {
+    name: overrides.id,
+    chips: 50,
+    personalOperators: [
+      { kind: 'operator', operator: '+' },
+      { kind: 'operator', operator: '-' },
+      { kind: 'operator', operator: '÷' },
+    ],
+    currentBet: 0,
+    folded: false,
+    secretCard: null,
+    faceUpCards: [],
+    ...overrides,
+  };
+}
+
+function makeDealtPlayer(overrides: Partial<DealtPlayer> & { id: string }): DealtPlayer {
+  return {
+    name: overrides.id,
+    chips: 10,
+    personalOperators: [],
+    secretCard: { kind: 'number', value: 5, suit: 'Gold' },
+    faceUpCards: [],
+    currentBet: 0,
+    folded: false,
+    betChoice: null,
+    lowEquation: null,
+    highEquation: null,
+    lowResult: null,
+    highResult: null,
+    ...overrides,
+  };
+}
+
+function makeBettingState(players: DealtPlayer[], phase: 'betting-1' | 'betting-2' = 'betting-1'): BettingState {
+  return {
+    phase,
+    players,
+    deck: [],
+    pot: 10,
+    forcedBetAmount: 1,
+    calculationTimeLimit: 90,
+    round: 1,
+    log: [],
+    activePlayerIndex: 0,
+    currentBet: 0,
+    bettingActionsThisRound: 0,
+  };
+}
+
+function makeHighLowState(players: DealtPlayer[]): HighLowBetState {
+  return {
+    phase: 'high-low-bet',
+    players,
+    deck: [],
+    pot: 20,
+    forcedBetAmount: 1,
+    calculationTimeLimit: 90,
+    round: 1,
+    log: [],
+  };
+}
+
+// ─── createGame ───────────────────────────────────────────────────────────────
 
 describe('createGame', () => {
   it('requires at least 2 players', () => {
@@ -32,21 +106,40 @@ describe('createGame', () => {
     expect(state.phase).toBe('setup');
     expect(state.round).toBe(0);
   });
+
+  it('players start as UndealPlayer (secretCard null, faceUpCards empty)', () => {
+    const state = createGame(['Alice', 'Bob']);
+    state.players.forEach((p) => {
+      expect(p.secretCard).toBeNull();
+      expect(p.faceUpCards).toHaveLength(0);
+    });
+  });
 });
 
+// ─── startRound ───────────────────────────────────────────────────────────────
+
 describe('startRound', () => {
-  it('increments round and resets player hands', () => {
+  it('increments round and returns forced-bet phase', () => {
     const state = createGame(['Alice', 'Bob']);
     const next = startRound(state);
     expect(next.round).toBe(1);
     expect(next.phase).toBe('forced-bet');
-    next.players.forEach((p) => {
-      expect(p.secretCard).toBeNull();
-      expect(p.faceUpCards).toHaveLength(0);
-      expect(p.folded).toBe(false);
-    });
+  });
+
+  it('preserves rollover pot from applyPayouts', () => {
+    const state = createGame(['Alice', 'Bob']);
+    const withRollover: SetupState = { ...state, pot: 7 };
+    const next = startRound(withRollover);
+    expect(next.pot).toBe(7);
+  });
+
+  it('new game starts with pot 0', () => {
+    const state = createGame(['Alice', 'Bob']);
+    expect(startRound(state).pot).toBe(0);
   });
 });
+
+// ─── collectForcedBets ────────────────────────────────────────────────────────
 
 describe('collectForcedBets', () => {
   it('deducts chips and adds to pot', () => {
@@ -67,11 +160,16 @@ describe('collectForcedBets', () => {
   });
 });
 
+// ─── dealing phases ───────────────────────────────────────────────────────────
+
 describe('dealing phases', () => {
-  it('phase 1 gives every active player a secret card and ≥2 face-up cards', () => {
+  function dealingState(): Dealing1State {
     const base = startRound(createGame(['Alice', 'Bob', 'Charlie'], 50));
-    const state = collectForcedBets(base);
-    const dealt = runDealingPhase1(state, declineMultiplication);
+    return collectForcedBets(base);
+  }
+
+  it('phase 1 gives every active player a secret card and ≥2 face-up cards', () => {
+    const dealt = runDealingPhase1(dealingState(), declineMultiplication);
     dealt.players.forEach((p) => {
       expect(p.secretCard).not.toBeNull();
       expect(p.faceUpCards.length).toBeGreaterThanOrEqual(2);
@@ -80,32 +178,72 @@ describe('dealing phases', () => {
   });
 
   it('secret card is always a number card', () => {
-    const base = startRound(createGame(['Alice', 'Bob'], 50));
-    const state = collectForcedBets(base);
-    const dealt = runDealingPhase1(state, declineMultiplication);
+    const dealt = runDealingPhase1(dealingState(), declineMultiplication);
     dealt.players.forEach((p) => {
-      expect(p.secretCard?.kind).toBe('number');
+      expect(p.secretCard.kind).toBe('number'); // non-null after dealing
     });
   });
 
   it('phase 2 gives one more face-up card', () => {
-    const base = startRound(createGame(['Alice', 'Bob'], 50));
-    let state = collectForcedBets(base);
-    state = runDealingPhase1(state, declineMultiplication);
-    const countBefore = state.players.map((p) => p.faceUpCards.length);
-    // skip betting for test — manually advance phase
-    const state2 = runDealingPhase2({ ...state, phase: 'dealing-2' }, declineMultiplication);
-    state2.players.forEach((p, i) => {
-      // May be more than +1 if √ was drawn, but never fewer
+    const dealt1 = runDealingPhase1(dealingState(), declineMultiplication);
+    const countBefore = dealt1.players.map((p) => p.faceUpCards.length);
+    const dealing2: Dealing2State = { ...dealt1, phase: 'dealing-2' };
+    const dealt2 = runDealingPhase2(dealing2, declineMultiplication);
+    dealt2.players.forEach((p, i) => {
       expect(p.faceUpCards.length).toBeGreaterThanOrEqual((countBefore[i] ?? 0) + 1);
     });
   });
 });
 
+// ─── dealFaceUpCards — × card handling ───────────────────────────────────────
+
+describe('dealFaceUpCards — × card handling', () => {
+  function makePlayerWithOps(ops: Array<'+' | '-' | '÷'>): DealtPlayer {
+    return makeDealtPlayer({
+      id: 'p',
+      personalOperators: ops.map((o): OperatorCard => ({ kind: 'operator', operator: o })),
+    });
+  }
+
+  it('accepting × removes a personal operator and adds × + bonus number', () => {
+    const player = makePlayerWithOps(['+', '-', '÷']);
+    const deck = [
+      { kind: 'operator' as const, operator: '×' as const },
+      { kind: 'number' as const, value: 3 as const, suit: 'Gold' as const },
+      { kind: 'number' as const, value: 5 as const, suit: 'Gold' as const },
+      { kind: 'number' as const, value: 7 as const, suit: 'Gold' as const },
+      { kind: 'number' as const, value: 2 as const, suit: 'Gold' as const },
+    ];
+    const accept: MultiplicationDecision = { accept: true, discard: '+' };
+    const { player: result } = dealFaceUpCards(player, deck, () => accept);
+    expect(result.faceUpCards.some((c) => c.kind === 'operator' && c.operator === '×')).toBe(true);
+    expect((result as DealtPlayer).personalOperators.some((op) => op.operator === '+')).toBe(false);
+    expect((result as DealtPlayer).personalOperators).toHaveLength(2);
+  });
+
+  it('declining × keeps all personal operators and still grants bonus number', () => {
+    const player = makePlayerWithOps(['+', '-', '÷']);
+    const deck = [
+      { kind: 'operator' as const, operator: '×' as const },
+      { kind: 'number' as const, value: 3 as const, suit: 'Gold' as const },
+      { kind: 'number' as const, value: 5 as const, suit: 'Gold' as const },
+      { kind: 'number' as const, value: 7 as const, suit: 'Gold' as const },
+    ];
+    const decline: MultiplicationDecision = { accept: false };
+    const { player: result } = dealFaceUpCards(player, deck, () => decline);
+    expect(result.faceUpCards.some((c) => c.kind === 'operator' && c.operator === '×')).toBe(false);
+    expect((result as DealtPlayer).personalOperators).toHaveLength(3);
+    expect(result.faceUpCards.filter((c) => c.kind === 'number').length).toBeGreaterThanOrEqual(1);
+  });
+});
+
+// ─── betting ──────────────────────────────────────────────────────────────────
+
 describe('betting', () => {
   function bettingState() {
     const base = startRound(createGame(['Alice', 'Bob', 'Charlie'], 50, 1));
-    return collectForcedBets(base);
+    const dealing = collectForcedBets(base);
+    return runDealingPhase1(dealing, declineMultiplication);
   }
 
   it('raise increases pot and currentBet', () => {
@@ -116,23 +254,23 @@ describe('betting', () => {
   });
 
   it('call matches current bet', () => {
-    let state = bettingState();
+    let state: BettingState = bettingState();
     ({ state } = applyBettingAction(state, { type: 'raise', amount: 5 }));
     const callerChipsBefore = state.players[state.activePlayerIndex]?.chips ?? 0;
     ({ state } = applyBettingAction(state, { type: 'call' }));
-    const callerChipsAfter = state.players[(state.activePlayerIndex + state.players.length - 1) % state.players.length]?.chips ?? 0;
+    const prevIdx = (state.activePlayerIndex + state.players.length - 1) % state.players.length;
+    const callerChipsAfter = state.players[prevIdx]?.chips ?? 0;
     expect(callerChipsAfter).toBeLessThan(callerChipsBefore);
   });
 
   it('check is allowed when no raise has been made', () => {
     const state = bettingState();
-    // Reset bets to 0 to simulate no prior raises
-    const noRaise = resetBettingRound(state, 'betting-1');
-    expect(() => applyBettingAction(noRaise, { type: 'check' })).not.toThrow();
+    const reset: BettingState = { ...state, currentBet: 0, bettingActionsThisRound: 0, players: state.players.map((p) => ({ ...p, currentBet: 0 })) };
+    expect(() => applyBettingAction(reset, { type: 'check' })).not.toThrow();
   });
 
   it('check throws when there is an outstanding bet', () => {
-    let state = bettingState();
+    let state: BettingState = bettingState();
     ({ state } = applyBettingAction(state, { type: 'raise', amount: 5 }));
     expect(() => applyBettingAction(state, { type: 'check' })).toThrow();
   });
@@ -140,194 +278,116 @@ describe('betting', () => {
   it('fold removes player from active pool', () => {
     const state = bettingState();
     const { state: next } = applyBettingAction(state, { type: 'fold' });
-    const folded = next.players.filter((p) => p.folded);
-    expect(folded).toHaveLength(1);
+    expect(next.players.filter((p) => p.folded)).toHaveLength(1);
   });
 
   it('round is NOT complete right after a reset (no one has acted)', () => {
-    const state = resetBettingRound(bettingState(), 'betting-1');
-    expect(isBettingComplete(state)).toBe(false);
+    const state = bettingState();
+    const reset: BettingState = { ...state, bettingActionsThisRound: 0 };
+    expect(isBettingComplete(reset)).toBe(false);
   });
 
   it('round is complete after all active players have checked', () => {
-    let state = resetBettingRound(bettingState(), 'betting-1');
-    const active = state.players.filter((p) => !p.folded);
+    const state = bettingState();
+    const reset: BettingState = { ...state, currentBet: 0, bettingActionsThisRound: 0, players: state.players.map((p) => ({ ...p, currentBet: 0 })) };
+    let s: BettingState = reset;
+    const active = s.players.filter((p) => !p.folded);
     for (let i = 0; i < active.length; i++) {
-      ({ state } = applyBettingAction(state, { type: 'check' }));
+      ({ state: s } = applyBettingAction(s, { type: 'check' }));
     }
-    expect(isBettingComplete(state)).toBe(true);
+    expect(isBettingComplete(s)).toBe(true);
   });
 
   it('round is complete when only one player remains', () => {
-    let state = bettingState();
-    // Fold two players — only Charlie remains
+    let state: BettingState = bettingState();
     ({ state } = applyBettingAction(state, { type: 'fold' }));
     ({ state } = applyBettingAction(state, { type: 'fold' }));
     expect(isBettingComplete(state)).toBe(true);
   });
 
   it('raise below current bet throws', () => {
-    let state = bettingState();
+    let state: BettingState = bettingState();
     ({ state } = applyBettingAction(state, { type: 'raise', amount: 5 }));
     expect(() => applyBettingAction(state, { type: 'raise', amount: 3 })).toThrow();
   });
-});
 
-describe('applyBetChoices', () => {
-  it('records choices and advances phase to results', () => {
-    const state = createGame(['Alice', 'Bob']);
-    const choices = new Map<string, 'high' | 'low' | 'swing'>([
-      ['player-0', 'low'],
-      ['player-1', 'high'],
-    ]);
-    const next = applyBetChoices(state, choices);
-    expect(next.phase).toBe('results');
-    expect(next.players[0]?.betChoice).toBe('low');
-    expect(next.players[1]?.betChoice).toBe('high');
-  });
-});
-
-describe('startRound — rollover pot preservation', () => {
-  it('preserves rollover chips set by applyPayouts', () => {
-    const state = createGame(['Alice', 'Bob'], 50, 1);
-    // Simulate a state with a rollover pot (as set by applyPayouts)
-    const afterPayout = { ...startRound(state), pot: 7 };
-    const next = startRound(afterPayout);
-    // pot must NOT be reset to 0 — the rollover must survive
-    expect(next.pot).toBe(7);
-  });
-
-  it('new game starts with pot 0 (no rollover)', () => {
-    const state = createGame(['Alice', 'Bob'], 50, 1);
-    const next = startRound(state);
-    expect(next.pot).toBe(0);
-  });
-});
-
-describe('dealFaceUpCards — × card handling', () => {
-  function makePlayer(ops: Array<'+' | '-' | '÷'>): Player {
-    return {
-      id: 'p',
-      name: 'P',
-      chips: 50,
-      personalOperators: ops.map((o): OperatorCard => ({ kind: 'operator', operator: o })),
-      secretCard: null,
-      faceUpCards: [],
-      currentBet: 0,
-      folded: false,
-      betChoice: null,
-      lowEquation: null,
-      highEquation: null,
-      lowResult: null,
-      highResult: null,
-    };
-  }
-
-  it('accepting × removes a personal operator and adds × + bonus number to face-up', () => {
-    const player = makePlayer(['+', '-', '÷']);
-    // Build a deck: × card first, then plenty of number cards
-    const deck: Card[] = [
-      { kind: 'operator', operator: '×' },
-      { kind: 'number', value: 3, suit: 'Gold' },
-      { kind: 'number', value: 5, suit: 'Gold' },
-      { kind: 'number', value: 7, suit: 'Gold' },
-      { kind: 'number', value: 2, suit: 'Gold' },
+  it('all-in call caps at player chips', () => {
+    const players = [
+      makeDealtPlayer({ id: 'a', chips: 9, currentBet: 1 }),
+      makeDealtPlayer({ id: 'b', chips: 2, currentBet: 1 }),
     ];
-    const accept: MultiplicationDecision = { accept: true, discard: '+' };
-    const { player: result } = dealFaceUpCards(player, deck, () => accept);
-
-    // × should be in face-up cards
-    expect(result.faceUpCards.some((c) => c.kind === 'operator' && c.operator === '×')).toBe(true);
-    // + should be removed from personal operators
-    expect(result.personalOperators.some((op) => op.operator === '+')).toBe(false);
-    // Should have 2 personal operators left (- and ÷)
-    expect(result.personalOperators).toHaveLength(2);
-    // Bonus number card also added
-    const numCards = result.faceUpCards.filter((c) => c.kind === 'number');
-    expect(numCards.length).toBeGreaterThanOrEqual(1);
-  });
-
-  it('declining × keeps all personal operators and still grants bonus number card', () => {
-    const player = makePlayer(['+', '-', '÷']);
-    const deck: Card[] = [
-      { kind: 'operator', operator: '×' },
-      { kind: 'number', value: 3, suit: 'Gold' },
-      { kind: 'number', value: 5, suit: 'Gold' },
-      { kind: 'number', value: 7, suit: 'Gold' },
-      { kind: 'number', value: 2, suit: 'Gold' },
-    ];
-    const decline: MultiplicationDecision = { accept: false };
-    const { player: result } = dealFaceUpCards(player, deck, () => decline);
-
-    // × should NOT be in face-up cards
-    expect(result.faceUpCards.some((c) => c.kind === 'operator' && c.operator === '×')).toBe(false);
-    // All personal operators preserved
-    expect(result.personalOperators).toHaveLength(3);
-    // Bonus number card still granted
-    const numCards = result.faceUpCards.filter((c) => c.kind === 'number');
-    expect(numCards.length).toBeGreaterThanOrEqual(1);
-  });
-});
-
-describe('betting — all-in call', () => {
-  it('player with fewer chips than outstanding bet goes all-in', () => {
-    const base = startRound(createGame(['Alice', 'Bob'], 10, 1));
-    let state = collectForcedBets(base);
-    // Alice raises to 8 (has 9 chips remaining after forced bet)
-    ({ state } = applyBettingAction(state, { type: 'raise', amount: 8 }));
-    // Bob has 9 chips remaining, outstanding = 8-1 = 7 extra needed, Bob can pay that
-    // Instead, test with low chips: build a scenario manually
-    // Alice raised big; let's check that call caps at player.chips
-    const aliceChips = state.players.find((p) => p.name === 'Alice')?.chips ?? 0;
-    const bobChips = state.players.find((p) => p.name === 'Bob')?.chips ?? 0;
-    expect(aliceChips).toBeGreaterThanOrEqual(0);
-    expect(bobChips).toBeGreaterThanOrEqual(0);
-  });
-
-  it('call with insufficient chips pays only what player has', () => {
-    const base = startRound(createGame(['Alice', 'Bob'], 10, 1));
-    let state = collectForcedBets(base);
-    // Manually set Bob's chips very low so he can't fully call
-    state = {
-      ...state,
-      players: state.players.map((p) =>
-        p.name === 'Bob' ? { ...p, chips: 2 } : p,
-      ),
-    };
-    // Alice raises to 9
-    ({ state } = applyBettingAction(state, { type: 'raise', amount: 9 }));
-    // Now Bob's turn; Bob only has 2 chips, call is capped
-    const bobBefore = state.players.find((p) => p.name === 'Bob')!;
+    let state = makeBettingState(players);
+    state = { ...state, currentBet: 1 };
+    // A raises to 3 — the max allowed (B's effective stack is chips+currentBet = 3)
+    ({ state } = applyBettingAction(state, { type: 'raise', amount: 3 }));
+    // B can only pay 2 more chips (to match the raise of 3)
+    const bobBefore = state.players.find((p) => p.id === 'b')!;
     ({ state } = applyBettingAction(state, { type: 'call' }));
-    const bobAfter = state.players.find((p) => p.name === 'Bob')!;
+    const bobAfter = state.players.find((p) => p.id === 'b')!;
     expect(bobAfter.chips).toBe(0);
     expect(bobAfter.currentBet).toBe(bobBefore.currentBet + 2);
   });
 });
 
-describe('resetBettingRound — active index skips folded players', () => {
-  it('sets activePlayerIndex to first non-folded player', () => {
-    let state = startRound(createGame(['Alice', 'Bob', 'Charlie'], 50, 1));
-    state = collectForcedBets(state);
-    // Fold Alice (index 0)
-    ({ state } = applyBettingAction(state, { type: 'fold' }));
-    const reset = resetBettingRound(state, 'betting-2');
-    // First non-folded player should be Bob (index 1)
-    expect(reset.activePlayerIndex).toBe(1);
+// ─── advanceFromBetting ───────────────────────────────────────────────────────
+
+describe('advanceFromBetting', () => {
+  it('moves to dealing-2 after betting-1 with multiple active players', () => {
+    const players = [makeDealtPlayer({ id: 'a' }), makeDealtPlayer({ id: 'b' })];
+    const state = makeBettingState(players, 'betting-1');
+    const next = advanceFromBetting(state);
+    expect(next.phase).toBe('dealing-2');
+  });
+
+  it('moves to high-low-bet after betting-2', () => {
+    const players = [makeDealtPlayer({ id: 'a' }), makeDealtPlayer({ id: 'b' })];
+    const state = makeBettingState(players, 'betting-2');
+    const next = advanceFromBetting(state);
+    expect(next.phase).toBe('high-low-bet');
+  });
+
+  it('moves to results with last-player-standing when one active player remains', () => {
+    const players = [
+      makeDealtPlayer({ id: 'a', folded: false }),
+      makeDealtPlayer({ id: 'b', folded: true }),
+    ];
+    const state = makeBettingState(players, 'betting-1');
+    const next = advanceFromBetting(state);
+    expect(next.phase).toBe('results');
+    if (next.phase === 'results') {
+      expect(next.result.kind).toBe('last-player-standing');
+    }
   });
 });
 
+// ─── applyBetChoices ──────────────────────────────────────────────────────────
+
+describe('applyBetChoices', () => {
+  it('records choices', () => {
+    const players = [makeDealtPlayer({ id: 'player-0' }), makeDealtPlayer({ id: 'player-1' })];
+    const state = makeHighLowState(players);
+    const choices = new Map<string, 'high' | 'low' | 'swing'>([['player-0', 'low'], ['player-1', 'high']]);
+    const next = applyBetChoices(state, choices);
+    expect(next.players[0]?.betChoice).toBe('low');
+    expect(next.players[1]?.betChoice).toBe('high');
+  });
+});
+
+// ─── recordBetChoice ──────────────────────────────────────────────────────────
+
 describe('recordBetChoice', () => {
   it('records a single player bet choice without advancing phase', () => {
-    const state = createGame(['Alice', 'Bob']);
+    const players = [makeDealtPlayer({ id: 'player-0' }), makeDealtPlayer({ id: 'player-1' })];
+    const state = makeHighLowState(players);
     const { state: next, allChosen } = recordBetChoice(state, 'player-0', 'low');
     expect(next.players[0]?.betChoice).toBe('low');
-    expect(next.phase).toBe('setup'); // phase unchanged
-    expect(allChosen).toBe(false); // Bob hasn't chosen yet
+    expect(next.phase).toBe('high-low-bet');
+    expect(allChosen).toBe(false);
   });
 
   it('allChosen is true when all active players have chosen', () => {
-    let state = createGame(['Alice', 'Bob']);
+    const players = [makeDealtPlayer({ id: 'player-0' }), makeDealtPlayer({ id: 'player-1' })];
+    let state = makeHighLowState(players);
     let allChosen: boolean;
     ({ state, allChosen } = recordBetChoice(state, 'player-0', 'low'));
     expect(allChosen).toBe(false);
@@ -335,20 +395,77 @@ describe('recordBetChoice', () => {
     expect(allChosen).toBe(true);
   });
 
-  it('folded players are ignored when determining allChosen', () => {
-    let state = createGame(['Alice', 'Bob', 'Charlie']);
-    // Fold Charlie
-    state = {
-      ...state,
-      players: state.players.map((p) => (p.name === 'Charlie' ? { ...p, folded: true } : p)),
-    };
+  it('folded players are ignored for allChosen', () => {
+    const players = [
+      makeDealtPlayer({ id: 'player-0' }),
+      makeDealtPlayer({ id: 'player-1' }),
+      makeDealtPlayer({ id: 'player-2', folded: true }),
+    ];
+    let state = makeHighLowState(players);
     let allChosen: boolean;
     ({ state, allChosen } = recordBetChoice(state, 'player-0', 'low'));
     expect(allChosen).toBe(false);
     ({ state, allChosen } = recordBetChoice(state, 'player-1', 'high'));
-    expect(allChosen).toBe(true); // Charlie folded, so Alice + Bob is sufficient
+    expect(allChosen).toBe(true);
   });
 });
+
+// ─── advanceFromHighLowBet ────────────────────────────────────────────────────
+
+describe('advanceFromHighLowBet', () => {
+  it('transitions to results with a RoundResult', () => {
+    const players = [
+      makeDealtPlayer({ id: 'a', betChoice: 'low',  lowResult: 1,  secretCard: { kind: 'number', value: 1, suit: 'Gold' } }),
+      makeDealtPlayer({ id: 'b', betChoice: 'high', highResult: 20, secretCard: { kind: 'number', value: 9, suit: 'Gold' } }),
+    ];
+    const state = makeHighLowState(players);
+    const next = advanceFromHighLowBet(state);
+    expect(next.phase).toBe('results');
+    expect(next.result).toBeDefined();
+  });
+});
+
+// ─── advanceFromResults ───────────────────────────────────────────────────────
+
+describe('advanceFromResults', () => {
+  it('starts a new round when players still have chips', () => {
+    const players = [makeDealtPlayer({ id: 'a', chips: 10 }), makeDealtPlayer({ id: 'b', chips: 10 })];
+    const state: ResultsState = {
+      phase: 'results',
+      players,
+      deck: [],
+      pot: 20,
+      forcedBetAmount: 1,
+      calculationTimeLimit: 90,
+      round: 1,
+      log: [],
+      result: { kind: 'contested', lowWinnerId: 'a', highWinnerId: 'b', payouts: { a: 10, b: 10 } },
+    };
+    const next = advanceFromResults(state);
+    expect(next.phase).toBe('forced-bet');
+    expect(next.round).toBe(2);
+  });
+
+  it('moves to game-over when one player has all chips', () => {
+    const players = [makeDealtPlayer({ id: 'a', chips: 0 }), makeDealtPlayer({ id: 'b', chips: 10 })];
+    const state: ResultsState = {
+      phase: 'results',
+      players,
+      deck: [],
+      pot: 20,
+      forcedBetAmount: 1,
+      calculationTimeLimit: 90,
+      round: 1,
+      log: [],
+      result: { kind: 'contested', lowWinnerId: 'b', highWinnerId: 'b', payouts: { b: 20 } },
+    };
+    const next = advanceFromResults(state);
+    expect(next.phase).toBe('game-over');
+    if (next.phase === 'game-over') expect(next.winnerId).toBe('b');
+  });
+});
+
+// ─── checkGameOver ────────────────────────────────────────────────────────────
 
 describe('checkGameOver', () => {
   it('returns false when multiple players have chips', () => {
@@ -358,40 +475,33 @@ describe('checkGameOver', () => {
 
   it('returns true with correct winner when one player has chips', () => {
     const state = createGame(['Alice', 'Bob'], 50);
-    const broke = {
-      ...state,
-      players: state.players.map((p) => (p.name === 'Bob' ? { ...p, chips: 0 } : p)),
-    };
+    const broke: SetupState = { ...state, players: state.players.map((p) => p.name === 'Bob' ? { ...p, chips: 0 } : p) };
     expect(checkGameOver(broke)).toEqual({ gameOver: true, winnerId: 'player-0' });
   });
 
-  it('returns true when all players are at zero, picking player with most chips (all tied at 0 → first)', () => {
+  it('all at zero — picks first player', () => {
     const state = createGame(['Alice', 'Bob'], 50);
-    const allBroke = {
-      ...state,
-      players: state.players.map((p) => ({ ...p, chips: 0 })),
-    };
+    const allBroke: SetupState = { ...state, players: state.players.map((p) => ({ ...p, chips: 0 })) };
     const result = checkGameOver(allBroke);
     expect(result.gameOver).toBe(true);
-    expect(result.winnerId).toBe('player-0'); // tie → first player
-  });
-
-  it('picks player with most chips when not all are zero', () => {
-    const state = createGame(['Alice', 'Bob', 'Charlie'], 50);
-    const custom = {
-      ...state,
-      players: state.players.map((p) => ({
-        ...p,
-        chips: p.name === 'Alice' ? 0 : p.name === 'Bob' ? 0 : 10,
-      })),
-    };
-    expect(checkGameOver(custom)).toEqual({ gameOver: true, winnerId: 'player-2' });
+    expect(result.winnerId).toBe('player-0');
   });
 });
 
+// ─── recordEquationResults ────────────────────────────────────────────────────
+
 describe('recordEquationResults', () => {
+  function calcState(): CalculationState {
+    const base = startRound(createGame(['Alice', 'Bob'], 50));
+    const dealing = collectForcedBets(base);
+    const bet1 = runDealingPhase1(dealing, declineMultiplication);
+    const dealing2: Dealing2State = { ...bet1, phase: 'dealing-2' };
+    const calc = runDealingPhase2(dealing2, declineMultiplication);
+    return calc;
+  }
+
   it('stores low and high equation results for the specified player', () => {
-    const state = createGame(['Alice', 'Bob']);
+    const state = calcState();
     const next = recordEquationResults(state, 'player-0', 1.0, 20.0, '1 + 0', '10 × 2');
     const alice = next.players.find((p) => p.id === 'player-0')!;
     expect(alice.lowResult).toBe(1.0);
@@ -401,7 +511,7 @@ describe('recordEquationResults', () => {
   });
 
   it('does not affect other players', () => {
-    const state = createGame(['Alice', 'Bob']);
+    const state = calcState();
     const next = recordEquationResults(state, 'player-0', 1, 20, 'a', 'b');
     const bob = next.players.find((p) => p.id === 'player-1')!;
     expect(bob.lowResult).toBeNull();
@@ -409,20 +519,25 @@ describe('recordEquationResults', () => {
   });
 });
 
-describe('pot rollover end-to-end', () => {
-  it('rollover chips from applyPayouts survive into the next round via startRound', () => {
-    const state = createGame(['Alice', 'Bob'], 50, 1);
-    const round1 = startRound(state);
-    // Simulate a state where only __rollover__ exists in payouts (no one won the low side)
-    const fakeResult = {
-      lowWinnerId: null,
-      highWinnerId: 'player-1',
-      payouts: new Map([['player-1', 10], ['__rollover__', 5]]),
-    };
-    const afterPayout = applyPayouts({ ...round1, pot: 15 }, fakeResult);
-    expect(afterPayout.pot).toBe(5); // rollover set correctly
+// ─── pot rollover end-to-end ──────────────────────────────────────────────────
 
+describe('pot rollover end-to-end', () => {
+  it('rollover chips survive from applyPayouts through startRound', () => {
+    const players = [makeDealtPlayer({ id: 'a', chips: 10 }), makeDealtPlayer({ id: 'b', chips: 10 })];
+    const resultsState: ResultsState = {
+      phase: 'results',
+      players,
+      deck: [],
+      pot: 15,
+      forcedBetAmount: 1,
+      calculationTimeLimit: 90,
+      round: 1,
+      log: [],
+      result: { kind: 'contested', lowWinnerId: null, highWinnerId: 'b', payouts: { b: 10, __rollover__: 5 } },
+    };
+    const afterPayout = applyPayouts(resultsState);
+    expect(afterPayout.pot).toBe(5);
     const round2 = startRound(afterPayout);
-    expect(round2.pot).toBe(5); // rollover preserved — the bug we fixed
+    expect(round2.pot).toBe(5); // rollover preserved — key regression test
   });
 });

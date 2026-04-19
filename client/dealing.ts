@@ -1,181 +1,264 @@
 /**
- * dealing.ts — async dealing orchestration for the UI layer.
+ * dealing.ts — synchronous step machine for card dealing.
  *
- * The core dealing functions in src/game.ts are synchronous (pure).
- * This module wraps them with async/await so the UI can pause on × card
- * decisions and resume once the player has chosen.
+ * The core dealing logic in src/game.ts is pure and synchronous.  This module
+ * wraps it in a step-machine pattern so the UI can pause on × card decisions
+ * and resume once the player has chosen — without any async callbacks.
  *
- * Uses only the low-level primitives from src/deck.ts and the
- * dealSecretCards helper from src/game.ts — no business-rule duplication.
+ * Each DealStep is either:
+ *   - `complete`: dealing is done; `state` is the final post-deal GameState.
+ *   - `awaiting-decision`: a × card was drawn; the UI must call `resume` with
+ *     the player's MultiplicationDecision to continue.
+ *
+ * No I/O or Promises anywhere in this file.
  */
 
 import { drawCard, drawNumberCard } from '../src/deck';
-import { dealSecretCards, resetBettingRound } from '../src/game';
-import type { GameState, Player, Card, MultiplicationDecision } from '../src/types';
+import { dealSecretCards, initBettingRound } from '../src/game';
+import type {
+  Dealing1State, Dealing2State, Betting1State, CalculationState,
+  Player, DealtPlayer, Card, MultiplicationDecision,
+} from '../src/types';
 
-// ─── Single-player face-up deal (2 cards) ────────────────────────────────────
+// ─── Public step type ─────────────────────────────────────────────────────────
 
-async function dealFaceUpCardsAsync(
-  player: Player,
+export type DealStep<Final> =
+  | { status: 'complete'; state: Final }
+  | {
+      status: 'awaiting-decision';
+      /** The player who drew a × card and must decide. */
+      player: Player;
+      /** Intermediate game state (for live UI updates while dealing). */
+      state: Dealing1State | Dealing2State;
+      /** Call with the player's choice to continue dealing. */
+      resume: (decision: MultiplicationDecision) => DealStep<Final>;
+    };
+
+// ─── Internal per-player dealing ──────────────────────────────────────────────
+
+type CardAccumulator = {
+  faceUpCards: Card[];
+  personalOperators: { kind: 'operator'; operator: '+' | '-' | '÷' | '×' | '√' }[];
+};
+
+/**
+ * Synchronously draw one face-up card for a player.
+ * Returns the updated accumulator, remaining deck, and whether a symbol card
+ * was placed (√ or accepted ×).
+ *
+ * When a × card is drawn, returns a suspension instead so the caller can
+ * ask the player for their decision.
+ */
+type DrawOneResult =
+  | { kind: 'done'; acc: CardAccumulator; deck: Card[]; wasSymbol: boolean }
+  | { kind: 'needs-decision'; player: Player; deck: Card[]; acc: CardAccumulator;
+      resume: (d: MultiplicationDecision) => DrawOneResult };
+
+function drawOneFaceUp(
+  basePlayer: Player,
+  acc: CardAccumulator,
   deck: Card[],
-  requestDecision: (player: Player) => Promise<MultiplicationDecision>,
-): Promise<{ player: Player; deck: Card[] }> {
-  let currentDeck = [...deck];
-  const faceUpCards: Card[] = [...player.faceUpCards];
-  const personalOperators = [...player.personalOperators];
-
-  /** Draw one face-up card, apply √/× rules. Returns true if a symbol card was placed. */
-  const drawOne = async (): Promise<boolean> => {
-    const { card, remaining } = drawCard(currentDeck);
-    currentDeck = remaining;
-
-    if (card.kind === 'number') {
-      faceUpCards.push(card);
-      return false;
-    }
-
-    if (card.operator === '√') {
-      faceUpCards.push(card);
-      const { card: num, remaining: rem } = drawNumberCard(currentDeck);
-      currentDeck = rem;
-      faceUpCards.push(num);
-      return true;
-    }
-
-    if (card.operator === '×') {
-      const snap: Player = { ...player, faceUpCards: [...faceUpCards], personalOperators: [...personalOperators] };
-      const decision = await requestDecision(snap);
-      let accepted = false;
-      if (decision.accept) {
-        const idx = personalOperators.findIndex((op) => op.operator === decision.discard);
-        if (idx !== -1) {
-          personalOperators.splice(idx, 1);
-          faceUpCards.push(card);
-          accepted = true;
-        }
-        // If the chosen operator wasn't found, treat as a decline (shouldn't happen in normal play)
-      }
-      // Player always receives an additional number card regardless of decision
-      const { card: num, remaining: rem } = drawNumberCard(currentDeck);
-      currentDeck = rem;
-      faceUpCards.push(num);
-      return accepted;
-    }
-
-    // Any other operator — replace with a number
-    const { card: num, remaining: rem } = drawNumberCard(currentDeck);
-    currentDeck = rem;
-    faceUpCards.push(num);
-    return false;
-  };
-
-  const firstWasSymbol = await drawOne();
-
-  if (firstWasSymbol) {
-    // Rule: if both drawn cards are symbols, second must be a number
-    const { card: num, remaining: rem } = drawNumberCard(currentDeck);
-    currentDeck = rem;
-    faceUpCards.push(num);
-  } else {
-    await drawOne();
-  }
-
-  return { player: { ...player, faceUpCards, personalOperators }, deck: currentDeck };
-}
-
-// ─── Single-player one-card deal (phase 2) ───────────────────────────────────
-
-async function dealOneMoreAsync(
-  player: Player,
-  deck: Card[],
-  requestDecision: (player: Player) => Promise<MultiplicationDecision>,
-): Promise<{ player: Player; deck: Card[] }> {
-  let currentDeck = [...deck];
-  const faceUpCards: Card[] = [...player.faceUpCards];
-  const personalOperators = [...player.personalOperators];
-
-  const { card, remaining } = drawCard(currentDeck);
-  currentDeck = remaining;
+): DrawOneResult {
+  const { card, remaining } = drawCard(deck);
 
   if (card.kind === 'number') {
-    faceUpCards.push(card);
-  } else if (card.operator === '√') {
-    faceUpCards.push(card);
-    const { card: num, remaining: rem } = drawNumberCard(currentDeck);
-    currentDeck = rem;
-    faceUpCards.push(num);
-  } else if (card.operator === '×') {
-    const snap: Player = { ...player, faceUpCards: [...faceUpCards], personalOperators: [...personalOperators] };
-    const decision = await requestDecision(snap);
-    if (decision.accept) {
-      const idx = personalOperators.findIndex((op) => op.operator === decision.discard);
-      if (idx !== -1) {
-        personalOperators.splice(idx, 1);
-        faceUpCards.push(card);
-      }
-      // If operator not found, treat as decline (shouldn't happen in normal play)
-    }
-    const { card: num, remaining: rem } = drawNumberCard(currentDeck);
-    currentDeck = rem;
-    faceUpCards.push(num);
-  } else {
-    const { card: num, remaining: rem } = drawNumberCard(currentDeck);
-    currentDeck = rem;
-    faceUpCards.push(num);
+    return { kind: 'done', acc: { ...acc, faceUpCards: [...acc.faceUpCards, card] }, deck: remaining, wasSymbol: false };
   }
 
-  return { player: { ...player, faceUpCards, personalOperators }, deck: currentDeck };
+  if (card.operator === '√') {
+    const { card: num, remaining: rem } = drawNumberCard(remaining);
+    return {
+      kind: 'done',
+      acc: { ...acc, faceUpCards: [...acc.faceUpCards, card, num] },
+      deck: rem,
+      wasSymbol: true,
+    };
+  }
+
+  if (card.operator === '×') {
+    const snap = { ...basePlayer, faceUpCards: acc.faceUpCards, personalOperators: acc.personalOperators } as Player;
+    return {
+      kind: 'needs-decision',
+      player: snap,
+      deck: remaining,
+      acc,
+      resume: (d: MultiplicationDecision): DrawOneResult => {
+        let ops = acc.personalOperators;
+        let faceUp = acc.faceUpCards;
+        let accepted = false;
+
+        if (d.accept) {
+          const idx = ops.findIndex((op) => op.operator === d.discard);
+          if (idx !== -1) {
+            ops = ops.filter((_, i) => i !== idx);
+            faceUp = [...faceUp, card];
+            accepted = true;
+          }
+        }
+
+        const { card: num, remaining: rem } = drawNumberCard(remaining);
+        return {
+          kind: 'done',
+          acc: { faceUpCards: [...faceUp, num], personalOperators: ops },
+          deck: rem,
+          wasSymbol: accepted,
+        };
+      },
+    };
+  }
+
+  // Any other operator — replace with a number
+  const { card: num, remaining: rem } = drawNumberCard(remaining);
+  return { kind: 'done', acc: { ...acc, faceUpCards: [...acc.faceUpCards, num] }, deck: rem, wasSymbol: false };
 }
 
-// ─── Full phase runners ───────────────────────────────────────────────────────
+// ─── Phase 1 step machine ─────────────────────────────────────────────────────
 
 /**
- * Dealing Phase 1: deal secret card + 2 face-up cards to each active player.
- * Calls `onUpdate` after each player is dealt so the UI updates live.
- * Returns state with phase='betting-1' and a fresh betting round counter.
+ * Build the step machine for dealing phase 1 to all active players.
+ * `playerIdx` is the index into `players[]` currently being processed;
+ * `drawCount` tracks how many face-up draws the current player has had.
  */
-export async function runDealPhase1Async(
-  state: GameState,
-  requestDecision: (player: Player) => Promise<MultiplicationDecision>,
-  onUpdate: (s: GameState) => void,
-): Promise<GameState> {
+function phase1Step(
+  baseState: Dealing1State,
+  players: Player[],
+  deck: Card[],
+  playerIdx: number,
+  acc: CardAccumulator,
+  drawCount: number,   // 0 = first draw, 1 = second draw
+): DealStep<Betting1State> {
+  // Skip folded players
+  while (playerIdx < players.length && players[playerIdx]?.folded) {
+    playerIdx++;
+  }
+
+  // All players dealt — transition to betting-1
+  if (playerIdx >= players.length) {
+    const finalState: Dealing1State & { players: DealtPlayer[] } = {
+      ...baseState,
+      players: players as DealtPlayer[],
+      deck,
+    };
+    return { status: 'complete', state: initBettingRound(finalState, 'betting-1') };
+  }
+
+  const player = players[playerIdx]!;
+
+  // When starting a new player (drawCount === 0), seed operators from the player's actual
+  // personal operators so they carry through dealing and aren't lost.
+  if (drawCount === 0) {
+    acc = { faceUpCards: [], personalOperators: [...player.personalOperators] };
+  }
+
+  // This player already has 2 face-up draws — commit and move to next player
+  if (drawCount >= 2) {
+    const finishedPlayer: Player = {
+      ...player,
+      faceUpCards: acc.faceUpCards,
+      personalOperators: acc.personalOperators,
+    } as DealtPlayer;
+    const updatedPlayers = players.map((p, i) => (i === playerIdx ? finishedPlayer : p));
+    const intermediateState: Dealing1State = { ...baseState, players: updatedPlayers, deck };
+    return phase1Step(intermediateState, updatedPlayers, deck, playerIdx + 1, { faceUpCards: [], personalOperators: [] }, 0);
+  }
+
+  const result = drawOneFaceUp(player, acc, deck);
+
+  if (result.kind === 'needs-decision') {
+    const snap = {
+      ...baseState,
+      players: players.map((p, i) =>
+        i === playerIdx ? { ...p, faceUpCards: acc.faceUpCards, personalOperators: acc.personalOperators } as Player : p,
+      ),
+      deck: result.deck,
+    };
+    return {
+      status: 'awaiting-decision',
+      player: result.player,
+      state: snap,
+      resume: (d) => {
+        const next = result.resume(d);
+        if (next.kind !== 'done') throw new Error('Unexpected nested suspension');
+        const newAcc = next.acc;
+        const newDeck = next.deck;
+        const wasSymbol = next.wasSymbol;
+        // If first draw was a symbol, second draw must be a forced number
+        if (drawCount === 0 && wasSymbol) {
+          const { card: num, remaining } = drawNumberCard(newDeck);
+          const finalAcc = { ...newAcc, faceUpCards: [...newAcc.faceUpCards, num] };
+          return phase1Step(snap, players, remaining, playerIdx, finalAcc, 2);
+        }
+        return phase1Step(snap, players, newDeck, playerIdx, newAcc, drawCount + 1);
+      },
+    };
+  }
+
+  const { acc: newAcc, deck: newDeck, wasSymbol } = result;
+
+  // If first draw was a symbol, second must be a forced number (already included by drawOneFaceUp for √)
+  if (drawCount === 0 && wasSymbol) {
+    // Symbol draws already appended an extra number card; skip second drawOne
+    return phase1Step(baseState, players, newDeck, playerIdx, newAcc, 2);
+  }
+
+  return phase1Step(baseState, players, newDeck, playerIdx, newAcc, drawCount + 1);
+}
+
+/**
+ * Start dealing phase 1.  Returns the first step — either complete (no × cards
+ * drawn) or awaiting a player decision.
+ */
+export function startDealPhase1(state: Dealing1State): DealStep<Betting1State> {
   const withSecrets = dealSecretCards(state);
-  let deck = [...withSecrets.deck];
-  const players: Player[] = [...withSecrets.players];
-
-  for (let i = 0; i < players.length; i++) {
-    const p = players[i];
-    if (!p || p.folded) continue;
-    const result = await dealFaceUpCardsAsync(p, deck, requestDecision);
-    players[i] = result.player;
-    deck = result.deck;
-    onUpdate({ ...withSecrets, players: [...players], deck });
-  }
-
-  // Reset bets so betting-1 starts from 0 (forced bet money is already in pot)
-  return resetBettingRound({ ...withSecrets, players, deck }, 'betting-1');
+  const initialAcc: CardAccumulator = { faceUpCards: [], personalOperators: [] };
+  return phase1Step(withSecrets, [...withSecrets.players], [...withSecrets.deck], 0, initialAcc, 0);
 }
 
-/**
- * Dealing Phase 2: deal one additional face-up card to each active player.
- * Returns state with phase='calculation'.
- */
-export async function runDealPhase2Async(
-  state: GameState,
-  requestDecision: (player: Player) => Promise<MultiplicationDecision>,
-  onUpdate: (s: GameState) => void,
-): Promise<GameState> {
-  let deck = [...state.deck];
-  const players: Player[] = [...state.players];
+// ─── Phase 2 step machine ─────────────────────────────────────────────────────
 
-  for (let i = 0; i < players.length; i++) {
-    const p = players[i];
-    if (!p || p.folded) continue;
-    const result = await dealOneMoreAsync(p, deck, requestDecision);
-    players[i] = result.player;
-    deck = result.deck;
-    onUpdate({ ...state, players: [...players], deck });
+function phase2Step(
+  baseState: Dealing2State,
+  players: DealtPlayer[],
+  deck: Card[],
+  playerIdx: number,
+): DealStep<CalculationState> {
+  while (playerIdx < players.length && players[playerIdx]?.folded) {
+    playerIdx++;
   }
 
-  return { ...state, phase: 'calculation', players, deck };
+  if (playerIdx >= players.length) {
+    return { status: 'complete', state: { ...baseState, phase: 'calculation', players, deck } };
+  }
+
+  const player = players[playerIdx]!;
+  const acc: CardAccumulator = { faceUpCards: [...player.faceUpCards], personalOperators: [...player.personalOperators] };
+  const result = drawOneFaceUp(player, acc, deck);
+
+  if (result.kind === 'needs-decision') {
+    const snap: Dealing2State = {
+      ...baseState,
+      players,
+      deck: result.deck,
+    };
+    return {
+      status: 'awaiting-decision',
+      player: result.player,
+      state: snap,
+      resume: (d) => {
+        const next = result.resume(d);
+        if (next.kind !== 'done') throw new Error('Unexpected nested suspension');
+        const finished: DealtPlayer = { ...player, faceUpCards: next.acc.faceUpCards, personalOperators: next.acc.personalOperators };
+        const updatedPlayers = players.map((p, i) => (i === playerIdx ? finished : p));
+        return phase2Step({ ...baseState, players: updatedPlayers, deck: next.deck }, updatedPlayers, next.deck, playerIdx + 1);
+      },
+    };
+  }
+
+  const finished: DealtPlayer = { ...player, faceUpCards: result.acc.faceUpCards, personalOperators: result.acc.personalOperators };
+  const updatedPlayers = players.map((p, i) => (i === playerIdx ? finished : p));
+  return phase2Step({ ...baseState, players: updatedPlayers, deck: result.deck }, updatedPlayers, result.deck, playerIdx + 1);
+}
+
+export function startDealPhase2(state: Dealing2State): DealStep<CalculationState> {
+  return phase2Step(state, [...state.players], [...state.deck], 0);
 }

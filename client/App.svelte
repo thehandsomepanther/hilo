@@ -2,6 +2,7 @@
   import { onDestroy } from 'svelte';
   import { get } from 'svelte/store';
   import { gameState, pendingDecision, isDealing, resolveDecision, networkMode, localPlayerId } from './gameStore';
+  import type { DealtPlayer } from '../src/types';
   import Setup from './components/Setup.svelte';
   import ForcedBet from './components/ForcedBet.svelte';
   import Dealing from './components/Dealing.svelte';
@@ -161,7 +162,8 @@
             {@const isActive = player.id === activePlayerId && (phase === 'betting-1' || phase === 'betting-2')}
             {@const showSecret = !$localPlayerId || isMe}
             {@const showEquations = !$localPlayerId || isMe || phase === 'results'}
-            <tr style={isMe ? 'background-color: #fffbcc; font-weight: bold;' : ''}>
+            {@const dealt = 'secretCard' in player && player.secretCard !== null ? player as DealtPlayer : null}
+            <tr style={(isMe || isActive) ? 'background-color: #fffbcc; font-weight: bold;' : ''}>
               <td>
                 {player.name}
                 {#if isActive} ◀{/if}
@@ -169,28 +171,28 @@
               </td>
               <td>{player.chips}</td>
               <td>{player.currentBet}</td>
-              <td>{player.secretCard ? (showSecret ? renderCard(player.secretCard) : '?') : '—'}</td>
-              <td>{player.faceUpCards.length ? player.faceUpCards.map(renderCard).join('  ') : '—'}</td>
+              <td>{dealt ? (showSecret ? renderCard(dealt.secretCard) : '?') : '—'}</td>
+              <td>{dealt && dealt.faceUpCards.length ? dealt.faceUpCards.map(renderCard).join('  ') : '—'}</td>
               <td>{player.personalOperators.length ? player.personalOperators.map((op) => op.operator).join('  ') : '—'}</td>
               <td>
-                {#if player.betChoice !== null}
+                {#if dealt && dealt.betChoice !== null}
                   {(!$localPlayerId || isMe || phase === 'results' || phase === 'game-over')
-                    ? player.betChoice
+                    ? dealt.betChoice
                     : '(hidden)'}
                 {:else}
                   —
                 {/if}
               </td>
               <td>
-                {#if player.lowEquation !== null}
-                  {showEquations ? `${player.lowEquation} = ${player.lowResult?.toFixed(4)}` : '(hidden)'}
+                {#if dealt && dealt.lowEquation !== null}
+                  {showEquations ? `${dealt.lowEquation} = ${dealt.lowResult?.toFixed(4)}` : '(hidden)'}
                 {:else}
                   —
                 {/if}
               </td>
               <td>
-                {#if player.highEquation !== null}
-                  {showEquations ? `${player.highEquation} = ${player.highResult?.toFixed(4)}` : '(hidden)'}
+                {#if dealt && dealt.highEquation !== null}
+                  {showEquations ? `${dealt.highEquation} = ${dealt.highResult?.toFixed(4)}` : '(hidden)'}
                 {:else}
                   —
                 {/if}
