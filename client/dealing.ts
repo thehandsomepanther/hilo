@@ -202,10 +202,14 @@ function phase1Step(
 
   const { acc: newAcc, deck: newDeck, wasSymbol } = result;
 
-  // If first draw was a symbol, second must be a forced number (already included by drawOneFaceUp for √)
+  // If the first draw was a symbol, draw one forced extra number so the player
+  // ends up with the same count of number cards as a non-symbol hand.
+  // (Mirrors the explicit extra-draw in src/game.ts dealFaceUpCards, and the
+  // identical logic in the needs-decision branch above for × cards.)
   if (drawCount === 0 && wasSymbol) {
-    // Symbol draws already appended an extra number card; skip second drawOne
-    return phase1Step(baseState, players, newDeck, playerIdx, newAcc, 2);
+    const { card: num, remaining } = drawNumberCard(newDeck);
+    const finalAcc = { ...newAcc, faceUpCards: [...newAcc.faceUpCards, num] };
+    return phase1Step(baseState, players, remaining, playerIdx, finalAcc, 2);
   }
 
   return phase1Step(baseState, players, newDeck, playerIdx, newAcc, drawCount + 1);

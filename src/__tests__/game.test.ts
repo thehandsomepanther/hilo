@@ -7,9 +7,6 @@ import {
   isBettingComplete,
   advanceFromBetting,
   applyBetChoices,
-  runDealingPhase1,
-  runDealingPhase2,
-  dealFaceUpCards,
   recordBetChoice,
   checkGameOver,
   recordEquationResults,
@@ -18,14 +15,28 @@ import {
 } from '../game';
 import { applyPayouts } from '../results';
 import {
-  MultiplicationDecision, DealtPlayer, UndealPlayer, OperatorCard,
+  MultiplicationDecision, DealtPlayer, UndealPlayer, OperatorCard, Player,
   ForcedBetState, Dealing1State, Dealing2State, BettingState,
-  HighLowBetState, CalculationState, ResultsState, SetupState,
+  HighLowBetState, CalculationState, ResultsState, SetupState, Card,
 } from '../types';
-
-const declineMultiplication = (): MultiplicationDecision => ({ accept: false });
+import { startDealPhase1, startDealPhase2, DealStep } from '../../client/dealing';
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
+
+/**
+ * Drive a DealStep to completion, supplying decisions via `decide`.
+ * Defaults to always declining × cards.
+ */
+function driveDealing<T>(
+  step: DealStep<T>,
+  decide: (player: Player) => MultiplicationDecision = () => ({ accept: false }),
+): T {
+  let current = step;
+  while (current.status === 'awaiting-decision') {
+    current = current.resume(decide(current.player));
+  }
+  return current.state;
+}
 
 function makeUndealPlayer(overrides: Partial<UndealPlayer> & { id: string }): UndealPlayer {
   return {
@@ -169,7 +180,7 @@ describe('dealing phases', () => {
   }
 
   it('phase 1 gives every active player a secret card and ≥2 face-up cards', () => {
-    const dealt = runDealingPhase1(dealingState(), declineMultiplication);
+    const dealt = driveDealing(startDealPhase1(dealingState()));
     dealt.players.forEach((p) => {
       expect(p.secretCard).not.toBeNull();
       expect(p.faceUpCards.length).toBeGreaterThanOrEqual(2);
@@ -178,62 +189,84 @@ describe('dealing phases', () => {
   });
 
   it('secret card is always a number card', () => {
-    const dealt = runDealingPhase1(dealingState(), declineMultiplication);
+    const dealt = driveDealing(startDealPhase1(dealingState()));
     dealt.players.forEach((p) => {
-      expect(p.secretCard.kind).toBe('number'); // non-null after dealing
+      expect(p.secretCard.kind).toBe('number');
     });
   });
 
   it('phase 2 gives one more face-up card', () => {
-    const dealt1 = runDealingPhase1(dealingState(), declineMultiplication);
+    const dealt1 = driveDealing(startDealPhase1(dealingState()));
     const countBefore = dealt1.players.map((p) => p.faceUpCards.length);
     const dealing2: Dealing2State = { ...dealt1, phase: 'dealing-2' };
-    const dealt2 = runDealingPhase2(dealing2, declineMultiplication);
+    const dealt2 = driveDealing(startDealPhase2(dealing2));
     dealt2.players.forEach((p, i) => {
       expect(p.faceUpCards.length).toBeGreaterThanOrEqual((countBefore[i] ?? 0) + 1);
     });
   });
 });
 
-// ─── dealFaceUpCards — × card handling ───────────────────────────────────────
+// ─── dealing — × card handling ────────────────────────────────────────────────
 
-describe('dealFaceUpCards — × card handling', () => {
-  function makePlayerWithOps(ops: Array<'+' | '-' | '÷'>): DealtPlayer {
-    return makeDealtPlayer({
-      id: 'p',
-      personalOperators: ops.map((o): OperatorCard => ({ kind: 'operator', operator: o })),
-    });
+describe('dealing — × card handling', () => {
+  /**
+   * Build a Dealing1State whose deck is fully controlled so that Alice's first
+   * face-up draw is guaranteed to be a × card.
+   *
+   * Deck layout:
+   *   [0] Alice's secret (number, consumed by drawNumberCard)
+   *   [1] Bob's secret   (number, consumed by drawNumberCard)
+   *   [2] × card          — Alice's first face-up draw
+   *   [3] bonus number    — paired with ×
+   *   [4] extra number    — forced after a symbol draw (wasSymbol=true on drawCount 0)
+   *   [5-6] Bob's two face-up draws
+   */
+  function dealingStateWithMultiplication(): Dealing1State {
+    const game = startRound(createGame(['Alice', 'Bob'], 50));
+    const dealing = collectForcedBets(game);
+    const deck: Card[] = [
+      { kind: 'number', value: 1, suit: 'Gold' },
+      { kind: 'number', value: 2, suit: 'Gold' },
+      { kind: 'operator', operator: '×' },
+      { kind: 'number', value: 3, suit: 'Gold' },
+      { kind: 'number', value: 4, suit: 'Gold' },
+      { kind: 'number', value: 5, suit: 'Gold' },
+      { kind: 'number', value: 6, suit: 'Gold' },
+    ];
+    return { ...dealing, deck };
   }
 
-  it('accepting × removes a personal operator and adds × + bonus number', () => {
-    const player = makePlayerWithOps(['+', '-', '÷']);
-    const deck = [
-      { kind: 'operator' as const, operator: '×' as const },
-      { kind: 'number' as const, value: 3 as const, suit: 'Gold' as const },
-      { kind: 'number' as const, value: 5 as const, suit: 'Gold' as const },
-      { kind: 'number' as const, value: 7 as const, suit: 'Gold' as const },
-      { kind: 'number' as const, value: 2 as const, suit: 'Gold' as const },
-    ];
-    const accept: MultiplicationDecision = { accept: true, discard: '+' };
-    const { player: result } = dealFaceUpCards(player, deck, () => accept);
-    expect(result.faceUpCards.some((c) => c.kind === 'operator' && c.operator === '×')).toBe(true);
-    expect((result as DealtPlayer).personalOperators.some((op) => op.operator === '+')).toBe(false);
-    expect((result as DealtPlayer).personalOperators).toHaveLength(2);
+  it('step machine suspends when a × card is drawn', () => {
+    const step = startDealPhase1(dealingStateWithMultiplication());
+    expect(step.status).toBe('awaiting-decision');
   });
 
-  it('declining × keeps all personal operators and still grants bonus number', () => {
-    const player = makePlayerWithOps(['+', '-', '÷']);
-    const deck = [
-      { kind: 'operator' as const, operator: '×' as const },
-      { kind: 'number' as const, value: 3 as const, suit: 'Gold' as const },
-      { kind: 'number' as const, value: 5 as const, suit: 'Gold' as const },
-      { kind: 'number' as const, value: 7 as const, suit: 'Gold' as const },
-    ];
+  it('accepting × removes a personal operator and adds × to face-up cards', () => {
+    const step = startDealPhase1(dealingStateWithMultiplication());
+    expect(step.status).toBe('awaiting-decision');
+    if (step.status !== 'awaiting-decision') return;
+
+    const accept: MultiplicationDecision = { accept: true, discard: '+' };
+    const final = driveDealing(step.resume(accept));
+
+    const alice = final.players.find((p) => p.name === 'Alice')!;
+    expect(alice.faceUpCards.some((c) => c.kind === 'operator' && c.operator === '×')).toBe(true);
+    expect(alice.personalOperators.some((op) => op.operator === '+')).toBe(false);
+    expect(alice.personalOperators).toHaveLength(2);
+  });
+
+  it('declining × keeps all personal operators and still grants a bonus number', () => {
+    const step = startDealPhase1(dealingStateWithMultiplication());
+    expect(step.status).toBe('awaiting-decision');
+    if (step.status !== 'awaiting-decision') return;
+
     const decline: MultiplicationDecision = { accept: false };
-    const { player: result } = dealFaceUpCards(player, deck, () => decline);
-    expect(result.faceUpCards.some((c) => c.kind === 'operator' && c.operator === '×')).toBe(false);
-    expect((result as DealtPlayer).personalOperators).toHaveLength(3);
-    expect(result.faceUpCards.filter((c) => c.kind === 'number').length).toBeGreaterThanOrEqual(1);
+    const final = driveDealing(step.resume(decline));
+
+    const alice = final.players.find((p) => p.name === 'Alice')!;
+    expect(alice.faceUpCards.some((c) => c.kind === 'operator' && c.operator === '×')).toBe(false);
+    expect(alice.personalOperators).toHaveLength(3);
+    expect(alice.faceUpCards.filter((c) => c.kind === 'number').length).toBeGreaterThanOrEqual(1);
   });
 });
 
@@ -243,7 +276,7 @@ describe('betting', () => {
   function bettingState() {
     const base = startRound(createGame(['Alice', 'Bob', 'Charlie'], 50, 1));
     const dealing = collectForcedBets(base);
-    return runDealingPhase1(dealing, declineMultiplication);
+    return driveDealing(startDealPhase1(dealing));
   }
 
   it('raise increases pot and currentBet', () => {
@@ -494,10 +527,9 @@ describe('recordEquationResults', () => {
   function calcState(): CalculationState {
     const base = startRound(createGame(['Alice', 'Bob'], 50));
     const dealing = collectForcedBets(base);
-    const bet1 = runDealingPhase1(dealing, declineMultiplication);
+    const bet1 = driveDealing(startDealPhase1(dealing));
     const dealing2: Dealing2State = { ...bet1, phase: 'dealing-2' };
-    const calc = runDealingPhase2(dealing2, declineMultiplication);
-    return calc;
+    return driveDealing(startDealPhase2(dealing2));
   }
 
   it('stores low and high equation results for the specified player', () => {
