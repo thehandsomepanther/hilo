@@ -66,6 +66,13 @@ function drawOneFaceUp(
   }
 
   if (card.operator === '√') {
+    // Prevent a second √ in the same hand — it makes valid equations impossible.
+    const alreadyHasSqrt = acc.faceUpCards.some((c) => c.kind === 'operator' && c.operator === '√');
+    if (alreadyHasSqrt) {
+      // Treat this √ like any other non-number card: replace with a number.
+      const { card: num, remaining: rem } = drawNumberCard(remaining);
+      return { kind: 'done', acc: { ...acc, faceUpCards: [...acc.faceUpCards, num] }, deck: rem, wasSymbol: false };
+    }
     const { card: num, remaining: rem } = drawNumberCard(remaining);
     return {
       kind: 'done',

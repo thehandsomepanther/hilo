@@ -93,18 +93,19 @@ function handleState(state: GameState, botIds: Set<string>): void {
 
       const key = `${s.round}-calculation`;
       scheduleOnce(key, randomDelay(), () => {
-        const current = get(gameState);
-        if (!current || current.phase !== 'calculation') return;
-        const cs = current as CalculationState;
-        for (const player of cs.players) {
-          if (!botIds.has(player.id) || player.folded) continue;
+        for (const botId of botIds) {
+          const current = get(gameState);
+          if (!current || current.phase !== 'calculation') return;
+          const cs = current as CalculationState;
+          const player = cs.players.find((p) => p.id === botId);
+          if (!player || player.folded) continue;
           if (player.lowEquation !== null && player.highEquation !== null) continue;
 
           const tokens = [player.secretCard, ...player.faceUpCards, ...player.personalOperators];
           const { lowExpr, highExpr } = solveEquations(tokens);
 
-          if (player.lowEquation  === null) submitEquation(player.id, 'low',  lowExpr);
-          if (player.highEquation === null) submitEquation(player.id, 'high', highExpr);
+          if (player.lowEquation  === null) submitEquation(botId, 'low',  lowExpr);
+          if (player.highEquation === null) submitEquation(botId, 'high', highExpr);
         }
       });
       break;
