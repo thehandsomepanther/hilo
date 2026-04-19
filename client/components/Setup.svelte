@@ -66,7 +66,7 @@
           Player {i + 1}
         {/if}
 
-        {#if player.isBot && isStandalone}
+        {#if player.isBot && canStart}
           <!-- Bots get an editable name field on the host/standalone side -->
           <input
             type="text"
@@ -92,7 +92,7 @@
         {/if}
       </label>
 
-      {#if isStandalone && $lobbyState.players.length > 2}
+      {#if $lobbyState.players.length > 2 && (isStandalone || (canStart && player.isBot))}
         <button type="button" onclick={() => removePlayer(i)}>Remove</button>
       {/if}
       <br />
@@ -102,7 +102,8 @@
       <button type="button" onclick={addPlayer}>+ Add player</button>
       <button type="button" onclick={addBot}>+ Add bot</button>
     {:else if isHost}
-      <p><em>Players join by connecting via the network lobby.</em></p>
+      <button type="button" onclick={addBot}>+ Add bot</button>
+      <p><em>Human players join by connecting via the network lobby.</em></p>
     {/if}
   </fieldset>
 
