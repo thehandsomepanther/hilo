@@ -20,7 +20,7 @@ import type { BettingAction } from '../src/game';
 
 // ─── Lobby types ─────────────────────────────────────────────────────────────
 
-export type LobbyPlayer = { name: string };
+export type LobbyPlayer = { name: string; isBot: boolean };
 
 export type LobbyState = {
   players: LobbyPlayer[];

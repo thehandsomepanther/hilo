@@ -37,6 +37,7 @@ import { startDealPhase1, startDealPhase2 } from './dealing';
 import type { DealStep } from './dealing';
 import { HostNetwork, PeerNetwork } from './network';
 import type { SerializedAction, LobbyState } from './network';
+import { startBotRunner } from './bots/botRunner';
 
 // ─── Stores ───────────────────────────────────────────────────────────────────
 
@@ -60,7 +61,7 @@ export const networkMode = writable<'standalone' | 'host' | 'peer'>('standalone'
 export const localPlayerId = writable<string | null>(null);
 
 export const lobbyState = writable<LobbyState>({
-  players: [{ name: '' }, { name: '' }],
+  players: [{ name: '', isBot: false }, { name: '', isBot: false }],
   startingChips: 50,
   forcedBetAmount: 1,
 });
@@ -71,6 +72,7 @@ export const myPlayerIndex = writable<number | null>(null);
 
 let hostNet: HostNetwork | null = null;
 let peerNet: PeerNetwork | null = null;
+let stopBots: (() => void) | null = null;
 
 /** Maps WebRTC peer ID → player index (e.g. 'peer-1' → 1). */
 const peerPlayerIndex = new Map<string, number>();
@@ -143,6 +145,13 @@ function runDealStep<Final extends GameState>(step: DealStep<Final>): void {
 
 // ─── Lobby actions ────────────────────────────────────────────────────────────
 
+export function addBot(): void {
+  lobbyState.update((s) => {
+    const botCount = s.players.filter((p) => p.isBot).length;
+    return { ...s, players: [...s.players, { name: `Bot ${botCount + 1}`, isBot: true }] };
+  });
+}
+
 export function updateLobbyName(index: number, name: string): void {
   if (get(networkMode) === 'peer') {
     peerNet?.send({ type: 'action', payload: { name: 'updateLobbyName', args: [index, name] } });
@@ -165,6 +174,17 @@ export function initGame(playerNames: string[], startingChips: number, forcedBet
   gameState.set(startRound(s));
   const idx = get(myPlayerIndex);
   if (idx !== null) localPlayerId.set(`player-${idx}`);
+
+  // Start bot runner for any bot slots (host and standalone only).
+  stopBots?.();
+  stopBots = null;
+  const lobby = get(lobbyState);
+  const botIds = new Set(
+    lobby.players
+      .map((p, i) => (p.isBot ? `player-${i}` : null))
+      .filter((id): id is string => id !== null),
+  );
+  if (botIds.size > 0) stopBots = startBotRunner(botIds);
 }
 
 export function doForcedBets(): void {
@@ -367,8 +387,21 @@ export function doNextRound(): void {
 }
 
 export function doPlayAgain(): void {
+  stopBots?.();
+  stopBots = null;
   peerPlayerIndex.clear();
   gameState.set(null);
+}
+
+/**
+ * Submit a high/low bet choice on behalf of a bot player.
+ * Bots run on the host tab and cannot use submitMyBetChoice (which is tied
+ * to localPlayerId).  This bypasses the localPlayerId check.
+ */
+export function submitBotBetChoice(playerId: string, choice: 'high' | 'low' | 'swing'): void {
+  const state = get(gameState);
+  if (!state || state.phase !== 'high-low-bet') return;
+  applyOneChoice(state as HighLowBetState, playerId, choice);
 }
 
 // ─── Networking setup ─────────────────────────────────────────────────────────
@@ -378,12 +411,12 @@ export async function setupAsHost(peerId: string): Promise<string> {
     hostNet = new HostNetwork();
     networkMode.set('host');
     myPlayerIndex.set(0);
-    lobbyState.update((s) => ({ ...s, players: [{ name: '' }] }));
+    lobbyState.update((s) => ({ ...s, players: [{ name: '', isBot: false }] }));
 
     hostNet.onMessage = (_pid, msg) => { applyPeerAction(msg.payload); };
 
     hostNet.onConnected = (pid) => {
-      lobbyState.update((ls) => ({ ...ls, players: [...ls.players, { name: '' }] }));
+      lobbyState.update((ls) => ({ ...ls, players: [...ls.players, { name: '', isBot: false }] }));
       const currentLobby = get(lobbyState);
       const peerIndex = currentLobby.players.length - 1;
       peerPlayerIndex.set(pid, peerIndex);

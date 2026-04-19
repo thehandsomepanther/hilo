@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { lobbyState, myPlayerIndex, networkMode, updateLobbyName, initGame } from '../gameStore';
+  import { lobbyState, myPlayerIndex, networkMode, updateLobbyName, initGame, addBot } from '../gameStore';
 
   let error = $state('');
 
@@ -18,7 +18,7 @@
   // ─── Standalone-only: add / remove player slots ────────────────────────────
 
   function addPlayer() {
-    lobbyState.update((s) => ({ ...s, players: [...s.players, { name: '' }] }));
+    lobbyState.update((s) => ({ ...s, players: [...s.players, { name: '', isBot: false }] }));
   }
 
   function removePlayer(i: number) {
@@ -58,13 +58,23 @@
 
     {#each $lobbyState.players as player, i}
       <label>
-        {#if isMine(i)}
+        {#if player.isBot}
+          <strong>Player {i + 1} (Bot)</strong>
+        {:else if isMine(i)}
           <strong>Player {i + 1} (you)</strong>
         {:else}
           Player {i + 1}
         {/if}
 
-        {#if isMine(i)}
+        {#if player.isBot && isStandalone}
+          <!-- Bots get an editable name field on the host/standalone side -->
+          <input
+            type="text"
+            value={player.name}
+            placeholder="Bot name"
+            oninput={(e) => updateLobbyName(i, (e.target as HTMLInputElement).value)}
+          />
+        {:else if isMine(i)}
           <input
             type="text"
             value={player.name}
@@ -75,7 +85,7 @@
         {:else}
           <input
             type="text"
-            value={player.name || '(waiting for player…)'}
+            value={player.name || (player.isBot ? '(bot)' : '(waiting for player…)')}
             readonly
             disabled
           />
@@ -90,6 +100,7 @@
 
     {#if isStandalone}
       <button type="button" onclick={addPlayer}>+ Add player</button>
+      <button type="button" onclick={addBot}>+ Add bot</button>
     {:else if isHost}
       <p><em>Players join by connecting via the network lobby.</em></p>
     {/if}
