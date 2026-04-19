@@ -35,6 +35,9 @@ function baseState(players: Player[]): GameState {
     activePlayerIndex: 0,
     calculationTimeLimit: 90,
     round: 1,
+    bettingActionsThisRound: 0,
+    winnerId: null,
+    log: [],
   };
 }
 
@@ -233,6 +236,84 @@ describe('resolveRound — swing bets', () => {
   });
 });
 
+describe('resolveRound — swing loses one side', () => {
+  it('swing wins only low — forfeits low, fallback non-swing high wins high half', () => {
+    const players = [
+      makePlayer({
+        id: 'swing',
+        betChoice: 'swing',
+        lowResult: 1,   // best low
+        highResult: 15, // loses to high-player
+        secretCard: numCard(5),
+      }),
+      makePlayer({
+        id: 'high-player',
+        betChoice: 'high',
+        highResult: 20,
+        secretCard: numCard(8),
+      }),
+    ];
+    const result = resolveRound({ ...baseState(players), pot: 20 });
+    // Swing didn't win both → forfeits
+    expect(result.payouts.get('swing') ?? 0).toBe(0);
+    // Low side: swing forfeited, no non-swing low player → rollover
+    expect(result.payouts.get('__rollover__')).toBe(10);
+    // High side: high-player wins
+    expect(result.payouts.get('high-player')).toBe(10);
+  });
+
+  it('swing wins only high — forfeits high, non-swing low wins low half', () => {
+    const players = [
+      makePlayer({
+        id: 'swing',
+        betChoice: 'swing',
+        lowResult: 5,   // loses low to low-player
+        highResult: 20, // best high
+        secretCard: numCard(7),
+      }),
+      makePlayer({
+        id: 'low-player',
+        betChoice: 'low',
+        lowResult: 1,
+        secretCard: numCard(1),
+      }),
+    ];
+    const result = resolveRound({ ...baseState(players), pot: 20 });
+    // Swing forfeits
+    expect(result.payouts.get('swing') ?? 0).toBe(0);
+    // Low half → low-player
+    expect(result.payouts.get('low-player')).toBe(10);
+    // High side: swing forfeited, no non-swing high player → rollover
+    expect(result.payouts.get('__rollover__')).toBe(10);
+  });
+});
+
+describe('resolveRound — odd pot split', () => {
+  it('high winner gets ceil, low winner gets floor', () => {
+    const players = [
+      makePlayer({ id: 'a', betChoice: 'low',  lowResult: 1,  secretCard: numCard(1) }),
+      makePlayer({ id: 'b', betChoice: 'high', highResult: 20, secretCard: numCard(9) }),
+    ];
+    const result = resolveRound({ ...baseState(players), pot: 21 });
+    expect(result.payouts.get('a')).toBe(10); // floor(21/2)
+    expect(result.payouts.get('b')).toBe(11); // ceil(21/2)
+  });
+});
+
+describe('resolveRound — both sides uncontested', () => {
+  it('entire pot rolls over when no valid contestants on either side', () => {
+    // Both players bet but submitted no equations
+    const players = [
+      makePlayer({ id: 'a', betChoice: 'low',  lowResult: null, secretCard: numCard(2) }),
+      makePlayer({ id: 'b', betChoice: 'high', highResult: null, secretCard: numCard(8) }),
+    ];
+    const result = resolveRound({ ...baseState(players), pot: 20 });
+    expect(result.payouts.get('__rollover__')).toBe(20); // both halves roll over
+    expect(result.payouts.get('a') ?? 0).toBe(0);
+    expect(result.payouts.get('b') ?? 0).toBe(0);
+  });
+});
+
 describe('applyPayouts', () => {
   it('adds winnings to player chips', () => {
     const players = [
@@ -261,5 +342,20 @@ describe('applyPayouts', () => {
     };
     const next = applyPayouts(state, result);
     expect(next.pot).toBe(15);
+  });
+
+  it('players with no payouts are unchanged', () => {
+    const players = [
+      makePlayer({ id: 'a', chips: 10 }),
+      makePlayer({ id: 'b', chips: 10 }),
+    ];
+    const result = {
+      lowWinnerId: 'a',
+      highWinnerId: 'a',
+      payouts: new Map([['a', 20]]),
+    };
+    const next = applyPayouts(baseState(players), result);
+    expect(next.players[1]?.chips).toBe(10); // Bob unchanged
+    expect(next.players[0]?.chips).toBe(30); // Alice got both halves
   });
 });

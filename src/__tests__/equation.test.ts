@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { evaluateEquation, closenessToTarget } from '../equation';
+import { evaluateEquation, closenessToTarget, buildCardMultiset } from '../equation';
 import { Card } from '../types';
 
 function numCard(value: number): Card {
@@ -104,12 +104,69 @@ describe('evaluateEquation', () => {
     const result = evaluateEquation('3 + 5 )', cards);
     expect(result.ok).toBe(false);
   });
-});
+
+  it('rejects duplicate number not in hand', () => {
+    // Hand has one 3, expression uses two 3s
+    const cards: Card[] = [numCard(3), numCard(5), opCard('+')];
+    const result = evaluateEquation('3 + 3', cards); // only one 3 in hand
+    expect(result.ok).toBe(false);
+  });
+
+  it('accepts expression using duplicate numbers that match hand', () => {
+    // Hand has two 3s
+    const cards: Card[] = [numCard(3), numCard(3), opCard('+')];
+    const result = evaluateEquation('3 + 3', cards);
+    expect(result).toEqual({ ok: true, value: 6 });
+  });
+
+  it('rejects expression with 0 when hand has no 0', () => {
+    const cards: Card[] = [numCard(1), numCard(2), opCard('+')];
+    const result = evaluateEquation('0 + 2', cards);
+    expect(result.ok).toBe(false);
+  });
+
+  it('evaluates expression using 0 when hand has 0', () => {
+    const cards: Card[] = [numCard(0), numCard(5), opCard('+')];
+    const result = evaluateEquation('0 + 5', cards);
+    expect(result).toEqual({ ok: true, value: 5 });
+  });
+
+  it('rejects expression with unclosed parenthesis', () => {
+    const cards: Card[] = [numCard(3), numCard(5), opCard('+')];
+    const result = evaluateEquation('(3 + 5', cards);
+    expect(result.ok).toBe(false);
+  });
+
+  it('rejects empty expression', () => {
+    const result = evaluateEquation('', []);
+    expect(result.ok).toBe(false);
+  });
+}); // end evaluateEquation describe
 
 describe('closenessToTarget', () => {
   it('returns absolute distance', () => {
     expect(closenessToTarget(19, 20)).toBe(1);
     expect(closenessToTarget(21, 20)).toBe(1);
     expect(closenessToTarget(-5, 1)).toBe(6);
+  });
+
+  it('returns 0 for exact match', () => {
+    expect(closenessToTarget(1, 1)).toBe(0);
+    expect(closenessToTarget(20, 20)).toBe(0);
+  });
+});
+
+describe('buildCardMultiset', () => {
+  it('separates number values from operator strings', () => {
+    const cards: Card[] = [numCard(3), numCard(7), opCard('+'), opCard('÷')];
+    const { numbers, operators } = buildCardMultiset(cards);
+    expect(numbers).toEqual([3, 7]);
+    expect(operators).toEqual(['+', '÷']);
+  });
+
+  it('returns empty arrays for empty input', () => {
+    const { numbers, operators } = buildCardMultiset([]);
+    expect(numbers).toEqual([]);
+    expect(operators).toEqual([]);
   });
 });

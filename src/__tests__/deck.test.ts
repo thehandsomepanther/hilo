@@ -69,4 +69,37 @@ describe('drawNumberCard', () => {
     const onlyOps = buildDeck().filter((c) => c.kind === 'operator');
     expect(() => drawNumberCard(onlyOps)).toThrow();
   });
+
+  it('skips over operator cards at the front of the deck', () => {
+    // Put an operator at the front, then number cards
+    const opsFirst = [
+      ...buildDeck().filter((c) => c.kind === 'operator').slice(0, 2),
+      ...buildDeck().filter((c) => c.kind === 'number'),
+    ];
+    const { card } = drawNumberCard(opsFirst);
+    expect(card.kind).toBe('number');
+  });
+});
+
+describe('buildDeck — card composition', () => {
+  it('contains all four suits for each number value', () => {
+    const deck = buildDeck();
+    const suits = ['Gold', 'Silver', 'Bronze', 'Black'] as const;
+    for (let v = 0; v <= 10; v++) {
+      for (const suit of suits) {
+        const found = deck.some(
+          (c) => c.kind === 'number' && c.value === v && c.suit === suit,
+        );
+        expect(found, `Missing ${v}(${suit})`).toBe(true);
+      }
+    }
+  });
+
+  it('does not contain + − ÷ (those are personal operators, not in the draw deck)', () => {
+    const deck = buildDeck();
+    const illegalOps = deck.filter(
+      (c) => c.kind === 'operator' && (c.operator === '+' || c.operator === '-' || c.operator === '÷'),
+    );
+    expect(illegalOps).toHaveLength(0);
+  });
 });
