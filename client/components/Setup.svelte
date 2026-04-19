@@ -92,7 +92,7 @@
         {/if}
       </label>
 
-      {#if $lobbyState.players.length > 2 && (isStandalone || (canStart && player.isBot))}
+      {#if $lobbyState.players.length > 1 && (isStandalone || (canStart && player.isBot))}
         <button type="button" onclick={() => removePlayer(i)}>Remove</button>
       {/if}
       <br />

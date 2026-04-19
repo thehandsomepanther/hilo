@@ -61,7 +61,7 @@ export const networkMode = writable<'standalone' | 'host' | 'peer'>('standalone'
 export const localPlayerId = writable<string | null>(null);
 
 export const lobbyState = writable<LobbyState>({
-  players: [{ name: '', isBot: false }, { name: '', isBot: false }],
+  players: [{ name: '', isBot: false }],
   startingChips: 50,
   forcedBetAmount: 1,
 });
