@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onDestroy } from 'svelte';
   import { gameState, submitEquation, unsubmitEquation, doAdvanceToBetting2, localPlayerId, networkMode } from '../gameStore';
-  import type { Card, DealtPlayer } from '../../src/types';
+  import type { Card, DealtPlayer } from '../gameStore';
 
   // ─── Token helpers ────────────────────────────────────────────────────────
 

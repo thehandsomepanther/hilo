@@ -86,11 +86,20 @@ type DealStep<Final> =
 
 `gameStore.runDealStep` drives this machine: on `complete`, it writes the final state; on `awaiting-decision`, it writes the intermediate state and sets `pendingDecision` so the UI can display the decision overlay.
 
+**Round-robin dealing**: phase 1 deals cards in two passes so each player receives their first card before anyone receives their second:
+
+```
+Pass 1:  player 0 draws,  player 1 draws,  player 2 draws, …
+Pass 2:  player 0 draws*, player 1 draws*, player 2 draws*, …   (* only if needed)
+```
+
+Implemented as `phase1Pass1Step` + `phase1Pass2Step` in `dealing.ts`. Pass 1 records which players need a second draw in a `needPass2: number[]` array passed into pass 2. Phase 2 (the separate dealing round between betting rounds) already deals one card per player and is inherently round-robin.
+
 **Card dealing rules:**
 - Each player receives a face-down secret number card, plus two face-up draws in phase 1 and one more in phase 2.
-- If the first face-up draw is a symbol card (√ or accepted ×), it consumes both draws (a paired number is added automatically), so the player still ends up with the right number of equation tokens.
+- If the first face-up draw is a symbol card (√ or accepted ×), it consumes both draws and a forced extra number is drawn, so the player ends up with the same number of number cards as a non-symbol hand. The player is skipped in pass 2.
 - A √ card paired with a number is always kept together as a unit in `faceUpCards`.
-- A player can receive at most one √ in their hand. If a second √ would be drawn (e.g. in phase 2), it is silently replaced with a plain number card. Two √ operators with only three number slots makes a valid equation impossible.
+- A player can receive at most one √ in their hand. If a second √ would be drawn, it is silently replaced with a plain number card. Two √ operators with only three number slots makes a valid equation impossible.
 
 ---
 

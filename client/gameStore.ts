@@ -39,6 +39,9 @@ import { HostNetwork, PeerNetwork } from './network';
 import type { SerializedAction, LobbyState } from './network';
 import { startBotRunner } from './bots/botRunner';
 
+// Re-export types that components need so they never import src/ directly.
+export type { Player, DealtPlayer, Card } from '../src/types';
+
 // ─── Stores ───────────────────────────────────────────────────────────────────
 
 export const gameState = writable<GameState | null>(null);
@@ -144,6 +147,22 @@ function runDealStep<Final extends GameState>(step: DealStep<Final>): void {
 }
 
 // ─── Lobby actions ────────────────────────────────────────────────────────────
+
+export function addPlayer(): void {
+  lobbyState.update((s) => ({ ...s, players: [...s.players, { name: '', isBot: false }] }));
+}
+
+export function removePlayer(index: number): void {
+  lobbyState.update((s) => ({ ...s, players: s.players.filter((_, i) => i !== index) }));
+}
+
+export function updateStartingChips(chips: number): void {
+  lobbyState.update((s) => ({ ...s, startingChips: chips }));
+}
+
+export function updateForcedBetAmount(amount: number): void {
+  lobbyState.update((s) => ({ ...s, forcedBetAmount: amount }));
+}
 
 export function addBot(): void {
   lobbyState.update((s) => {

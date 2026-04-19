@@ -1,5 +1,5 @@
 <script lang="ts">
-  import type { Player, Card } from '../../src/types';
+  import type { Player, Card } from '../gameStore';
 
   interface Props {
     player: Player;

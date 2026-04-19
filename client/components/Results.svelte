@@ -1,11 +1,6 @@
 <script lang="ts">
   import { gameState, doNextRound, networkMode } from '../gameStore';
 
-  // gameState is ResultsState when this component is mounted, so result is always present.
-  $effect(() => {
-    console.log('[Results] mounted, phase=%s', $gameState?.phase);
-  });
-
   const result = $derived($gameState?.phase === 'results' ? $gameState.result : null);
 
   const lowWinnerId  = $derived(result?.kind === 'contested' ? result.lowWinnerId  : null);

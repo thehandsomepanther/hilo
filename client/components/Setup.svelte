@@ -1,5 +1,9 @@
 <script lang="ts">
-  import { lobbyState, myPlayerIndex, networkMode, updateLobbyName, initGame, addBot } from '../gameStore';
+  import {
+    lobbyState, myPlayerIndex, networkMode,
+    addPlayer, removePlayer, updateLobbyName, updateStartingChips, updateForcedBetAmount,
+    initGame, addBot,
+  } from '../gameStore';
 
   let error = $state('');
 
@@ -13,19 +17,6 @@
   /** True when this slot index is the one this client controls. */
   function isMine(i: number): boolean {
     return isStandalone || $myPlayerIndex === i;
-  }
-
-  // ─── Standalone-only: add / remove player slots ────────────────────────────
-
-  function addPlayer() {
-    lobbyState.update((s) => ({ ...s, players: [...s.players, { name: '', isBot: false }] }));
-  }
-
-  function removePlayer(i: number) {
-    lobbyState.update((s) => ({
-      ...s,
-      players: s.players.filter((_, idx) => idx !== i),
-    }));
   }
 
   // ─── Start game ───────────────────────────────────────────────────────────
@@ -117,10 +108,7 @@
           type="number"
           value={$lobbyState.startingChips}
           min="1"
-          oninput={(e) => lobbyState.update((s) => ({
-            ...s,
-            startingChips: Number((e.target as HTMLInputElement).value),
-          }))}
+          oninput={(e) => updateStartingChips(Number((e.target as HTMLInputElement).value))}
         />
       </label>
       <br />
@@ -130,10 +118,7 @@
           type="number"
           value={$lobbyState.forcedBetAmount}
           min="1"
-          oninput={(e) => lobbyState.update((s) => ({
-            ...s,
-            forcedBetAmount: Number((e.target as HTMLInputElement).value),
-          }))}
+          oninput={(e) => updateForcedBetAmount(Number((e.target as HTMLInputElement).value))}
         />
       </label>
     </fieldset>

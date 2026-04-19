@@ -2,7 +2,7 @@
   import { onDestroy } from 'svelte';
   import { get } from 'svelte/store';
   import { gameState, pendingDecision, isDealing, resolveDecision, networkMode, localPlayerId } from './gameStore';
-  import type { DealtPlayer } from '../src/types';
+  import type { DealtPlayer, Card } from './gameStore';
   import Setup from './components/Setup.svelte';
   import ForcedBet from './components/ForcedBet.svelte';
   import Dealing from './components/Dealing.svelte';
@@ -12,7 +12,6 @@
   import Results from './components/Results.svelte';
   import GameOver from './components/GameOver.svelte';
   import NetworkLobby from './components/NetworkLobby.svelte';
-  import type { Card } from '../src/types';
 
   const SUIT_ABBR: Record<string, string> = { Gold: 'G', Silver: 'S', Bronze: 'Br', Black: 'Bl' };
 
@@ -43,9 +42,7 @@
     if (_gs !== null) networkConfigured = true;
   });
 
-  $effect(() => {
-    console.log('[App] phase=%s gameState.phase=%s', phase, _gs?.phase ?? 'null');
-  });
+
 </script>
 
 <header>

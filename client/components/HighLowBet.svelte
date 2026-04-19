@@ -1,7 +1,7 @@
 <script lang="ts">
   import { untrack } from 'svelte';
   import { gameState, doSubmitBetChoices, submitMyBetChoice, localPlayerId } from '../gameStore';
-  import type { DealtPlayer } from '../../src/types';
+  import type { DealtPlayer } from '../gameStore';
 
   // ─── Standalone flow (localPlayerId is null) ──────────────────────────────
   // Collect all players' choices locally then reveal at once.
@@ -61,7 +61,6 @@
   );
 
   function pickOption(choice: 'high' | 'low' | 'swing') {
-    console.log('[HighLowBet] pickOption', choice);
     myPick = choice;
   }
 

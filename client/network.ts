@@ -73,16 +73,22 @@ function blobToSdp(blob: string): RTCSessionDescriptionInit {
   return JSON.parse(atob(blob)) as RTCSessionDescriptionInit;
 }
 
-function waitForGathering(pc: RTCPeerConnection): Promise<void> {
+function waitForGathering(pc: RTCPeerConnection, timeoutMs = 4000): Promise<void> {
   return new Promise((resolve) => {
     if (pc.iceGatheringState === 'complete') { resolve(); return; }
-    const handler = () => {
-      if (pc.iceGatheringState === 'complete') {
-        pc.removeEventListener('icegatheringstatechange', handler);
-        resolve();
-      }
+    let settled = false;
+    const done = () => {
+      if (settled) return;
+      settled = true;
+      pc.removeEventListener('icegatheringstatechange', onStateChange);
+      pc.removeEventListener('icecandidate', onCandidate);
+      resolve();
     };
-    pc.addEventListener('icegatheringstatechange', handler);
+    const onStateChange = () => { if (pc.iceGatheringState === 'complete') done(); };
+    const onCandidate = (e: RTCPeerConnectionIceEvent) => { if (e.candidate === null) done(); };
+    pc.addEventListener('icegatheringstatechange', onStateChange);
+    pc.addEventListener('icecandidate', onCandidate);
+    setTimeout(done, timeoutMs);
   });
 }
 
