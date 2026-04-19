@@ -73,7 +73,8 @@ export type GamePhase =
   | 'calculation'
   | 'betting-2'
   | 'high-low-bet'
-  | 'results';
+  | 'results'
+  | 'game-over';
 
 // ─── Multiplication decision (during deal) ───────────────────────────────────
 
@@ -103,6 +104,11 @@ export type GameState = {
    * even when all bets happen to be equal (e.g. everyone at 0 after a reset).
    */
   bettingActionsThisRound: number;
+  /**
+   * Set when phase === 'game-over'. The ID of the last player with chips,
+   * or null if the game ended with no clear chip leader (all at zero).
+   */
+  winnerId: string | null;
 };
 
 // ─── Results ─────────────────────────────────────────────────────────────────

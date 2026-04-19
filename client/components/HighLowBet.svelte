@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { untrack } from 'svelte';
   import { gameState, doSubmitBetChoices, submitMyBetChoice, localPlayerId } from '../gameStore';
   import type { Player } from '../../src/types';
 
@@ -10,10 +11,13 @@
   let error = $state('');
 
   $effect(() => {
+    // Track only gameState.players; read choices via untrack to avoid a
+    // read-then-write cycle that would trigger effect_update_depth_exceeded.
     const players = $gameState?.players ?? [];
+    const prev = untrack(() => choices);
     const next = new Map<string, Player['betChoice']>();
     for (const p of players) {
-      if (!p.folded) next.set(p.id, choices.get(p.id) ?? null);
+      if (!p.folded) next.set(p.id, prev.get(p.id) ?? null);
     }
     choices = next;
   });

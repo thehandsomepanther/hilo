@@ -38,6 +38,7 @@ export function createGame(
     calculationTimeLimit,
     round: 0,
     bettingActionsThisRound: 0,
+    winnerId: null,
   };
 }
 
@@ -433,6 +434,32 @@ export function recordBetChoice(
   );
   const allChosen = players.filter((p) => !p.folded).every((p) => p.betChoice !== null);
   return { state: { ...state, players }, allChosen };
+}
+
+// ─── Game-over detection ──────────────────────────────────────────────────────
+
+/**
+ * After payouts are applied, check whether the game is over.
+ * The game ends when at most one player still has chips.
+ *
+ * Returns `{ gameOver: true, winnerId }` where `winnerId` is the last player
+ * with chips (or, if everyone is at zero, the player with the most chips going
+ * into the final round — i.e. the highest chip count in the post-payout state).
+ */
+export function checkGameOver(state: GameState): { gameOver: boolean; winnerId: string | null } {
+  const solvent = state.players.filter((p) => p.chips > 0);
+  if (solvent.length > 1) return { gameOver: false, winnerId: null };
+
+  if (solvent.length === 1) {
+    return { gameOver: true, winnerId: solvent[0]!.id };
+  }
+
+  // All players at zero — pick whoever has the most chips (tie goes to first).
+  const best = state.players.reduce<Player | null>(
+    (acc, p) => (acc === null || p.chips > acc.chips ? p : acc),
+    null,
+  );
+  return { gameOver: true, winnerId: best?.id ?? null };
 }
 
 /** Store computed equation results for a player. */

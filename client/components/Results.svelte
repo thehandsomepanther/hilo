@@ -35,9 +35,9 @@
       <p>
         <strong>Low pot (target 1):</strong>
         {#if lowWinner}
+          {@const p = $gameState?.players.find(pl => pl.id === lowWinner.id)}
           {lowWinner.name}
-          — equation: <code>{$gameState?.players.find(p => p.id === lowWinner.id)?.lowEquation}</code>
-          = {$gameState?.players.find(p => p.id === lowWinner.id)?.lowResult?.toFixed(4)}
+          — equation: <code>{p?.lowEquation}</code> = {p?.lowResult?.toFixed(4)}
         {:else}
           No winner (rolled over)
         {/if}
@@ -45,9 +45,9 @@
       <p>
         <strong>High pot (target 20):</strong>
         {#if highWinner}
+          {@const p = $gameState?.players.find(pl => pl.id === highWinner.id)}
           {highWinner.name}
-          — equation: <code>{$gameState?.players.find(p => p.id === highWinner.id)?.highEquation}</code>
-          = {$gameState?.players.find(p => p.id === highWinner.id)?.highResult?.toFixed(4)}
+          — equation: <code>{p?.lowEquation}</code> = {p?.highResult?.toFixed(4)}
         {:else}
           No winner (rolled over)
         {/if}
@@ -62,8 +62,7 @@
         <tr>
           <th>Player</th>
           <th>Bet</th>
-          <th>Low result</th>
-          <th>High result</th>
+          <th>Equation result</th>
           <th>Won</th>
           <th>Chips after</th>
         </tr>
@@ -74,7 +73,6 @@
             <td>{player.name}{player.folded ? ' (folded)' : ''}</td>
             <td>{player.betChoice ?? '—'}</td>
             <td>{player.lowResult !== null ? player.lowResult.toFixed(4) : '—'}</td>
-            <td>{player.highResult !== null ? player.highResult.toFixed(4) : '—'}</td>
             <td>{payout(player.id)}</td>
             <td>{player.chips + payout(player.id)}</td>
           </tr>

@@ -5,9 +5,10 @@
     player: Player;
     isActive?: boolean;
     showSecret?: boolean;
+    showEquations?: boolean;
   }
 
-  let { player, isActive = false, showSecret = true }: Props = $props();
+  let { player, isActive = false, showSecret = true, showEquations = true }: Props = $props();
 
   function renderCard(card: Card): string {
     if (card.kind === 'number') return `${card.value}(${card.suit[0]})`;
@@ -62,13 +63,8 @@
     {/if}
 
     {#if player.lowEquation !== null}
-      <dt>Low equation</dt>
-      <dd>{player.lowEquation} = {player.lowResult?.toFixed(4)}</dd>
-    {/if}
-
-    {#if player.highEquation !== null}
-      <dt>High equation</dt>
-      <dd>{player.highEquation} = {player.highResult?.toFixed(4)}</dd>
+      <dt>Equation</dt>
+      <dd>{showEquations ? `${player.lowEquation} = ${player.lowResult?.toFixed(4)}` : '(hidden)'}</dd>
     {/if}
   </dl>
 </fieldset>

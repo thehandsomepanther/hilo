@@ -28,6 +28,7 @@ import {
   applyBetChoices,
   recordBetChoice,
   recordEquationResults,
+  checkGameOver,
 } from '../src/game';
 import { evaluateEquation } from '../src/equation';
 import { resolveRound, applyPayouts } from '../src/results';
@@ -239,14 +240,17 @@ export function doBettingAction(action: BettingAction): void {
 
 // ─── Calculation ──────────────────────────────────────────────────────────────
 
-/** Validate an equation for a player and store the result. Returns an error string or null. */
+/**
+ * Validate an equation for a player and store the result in both low and high
+ * slots — players submit a single equation whose result is used for both targets.
+ * Returns an error string or null on success.
+ */
 export function submitEquation(
   playerId: string,
-  target: 'low' | 'high',
   expression: string,
 ): string | null {
   if (get(networkMode) === 'peer') {
-    peerNet?.send({ type: 'action', payload: { name: 'submitEquation', args: [playerId, target, expression] } });
+    peerNet?.send({ type: 'action', payload: { name: 'submitEquation', args: [playerId, expression] } });
     // Optimistically return null; the host will validate and broadcast the real state
     return null;
   }
@@ -265,12 +269,9 @@ export function submitEquation(
   const result = evaluateEquation(expression, allCards);
   if (!result.ok) return result.error;
 
-  const low = target === 'low' ? result.value : player.lowResult;
-  const high = target === 'high' ? result.value : player.highResult;
-  const lowEq = target === 'low' ? expression : player.lowEquation;
-  const highEq = target === 'high' ? expression : player.highEquation;
-
-  gameState.set(recordEquationResults(state, playerId, low, high, lowEq, highEq));
+  // Store the same result for both low and high — the bet choice determines which pot
+  // each player competes for; resolution uses lowResult for low pot, highResult for high pot.
+  gameState.set(recordEquationResults(state, playerId, result.value, result.value, expression, expression));
   return null;
 }
 
@@ -360,8 +361,25 @@ export function doNextRound(): void {
   if (!state) return;
   const result = get(roundResult);
   const afterPayout = result ? applyPayouts(state, result) : state;
+
+  const { gameOver, winnerId } = checkGameOver(afterPayout);
+  if (gameOver) {
+    roundResult.set(null);
+    gameState.set({ ...afterPayout, phase: 'game-over', winnerId });
+    return;
+  }
+
   roundResult.set(null);
   gameState.set(startRound(afterPayout));
+}
+
+// ─── Play again ───────────────────────────────────────────────────────────────
+
+/** Reset state back to the setup screen so players can start a new game. */
+export function doPlayAgain(): void {
+  // All clients reset locally — the game is finished and no further sync needed.
+  roundResult.set(null);
+  gameState.set(null);
 }
 
 // ─── Networking setup ─────────────────────────────────────────────────────────
@@ -495,7 +513,7 @@ function applyPeerAction(action: SerializedAction): void {
       doBettingAction(action.args[0]);
       break;
     case 'submitEquation':
-      submitEquation(...action.args);
+      submitEquation(action.args[0], action.args[1]);
       break;
     case 'doAdvanceToBetting2':
       doAdvanceToBetting2();
