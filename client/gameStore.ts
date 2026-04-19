@@ -358,7 +358,9 @@ export function doAdvanceToBetting2(): void {
 // ─── High/Low Bet ─────────────────────────────────────────────────────────────
 
 function applyOneChoice(state: HighLowBetState, playerId: string, choice: 'high' | 'low' | 'swing'): void {
-  const playerName = state.players.find((p) => p.id === playerId)?.name ?? playerId;
+  const player = state.players.find((p) => p.id === playerId);
+  if (!player || player.folded) return;
+  const playerName = player.name;
   const { state: next, allChosen } = recordBetChoice(state, playerId, choice);
   const withLog = appendLog(next, `${playerName} chose ${choice}`) as HighLowBetState;
   gameState.set(allChosen ? advanceFromHighLowBet(withLog) : withLog);

@@ -88,7 +88,10 @@
 
   {#if $localPlayerId}
     <!-- ── Networked: one player at a time ────────────────────────────────── -->
-    {#if mySubmittedChoice === null}
+    {@const me = hlPlayers.find((p) => p.id === $localPlayerId)}
+    {#if me?.folded}
+      <p><em>You folded — waiting for other players to submit their choices…</em></p>
+    {:else if mySubmittedChoice === null}
       <fieldset>
         <legend>Your choice</legend>
         <label>

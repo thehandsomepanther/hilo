@@ -265,6 +265,8 @@ export function recordBetChoice(
   playerId: string,
   choice: 'high' | 'low' | 'swing',
 ): { state: HighLowBetState; allChosen: boolean } {
+  const target = state.players.find((p) => p.id === playerId);
+  if (target?.folded) throw new Error(`Folded player ${playerId} cannot make a high/low bet`);
   const players: DealtPlayer[] = state.players.map((p) =>
     p.id === playerId ? { ...p, betChoice: choice } : p,
   );
