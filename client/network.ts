@@ -72,7 +72,8 @@ export type SerializedAction =
   | { name: 'doForcedBets' }
   | { name: 'doDeal';              args: [1 | 2] }
   | { name: 'doBettingAction';     args: [BettingAction] }
-  | { name: 'submitEquation';      args: [string, string] }
+  | { name: 'submitEquation';      args: [string, 'low' | 'high', string] }
+  | { name: 'unsubmitEquation';    args: [string, 'low' | 'high'] }
   | { name: 'doAdvanceToBetting2' }
   | { name: 'doSubmitBetChoices';  args: [Record<string, 'high' | 'low' | 'swing' | null>] }
   | { name: 'doNextRound' }

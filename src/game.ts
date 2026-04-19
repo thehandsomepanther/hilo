@@ -39,6 +39,7 @@ export function createGame(
     round: 0,
     bettingActionsThisRound: 0,
     winnerId: null,
+    log: [],
   };
 }
 
@@ -65,10 +66,11 @@ export function startRound(state: GameState): GameState {
     phase: 'forced-bet',
     players,
     deck: shuffle(buildDeck()),
-    pot: 0,
     currentBet: 0,
+    activePlayerIndex: 0,
     round: state.round + 1,
     bettingActionsThisRound: 0,
+    log: [],
   };
 }
 
@@ -402,7 +404,15 @@ function nextActiveIndex(players: Player[], currentIdx: number): number {
  */
 export function resetBettingRound(state: GameState, nextPhase: GameState['phase']): GameState {
   const players: Player[] = state.players.map((p) => ({ ...p, currentBet: 0 }));
-  return { ...state, phase: nextPhase, players, currentBet: 0, bettingActionsThisRound: 0 };
+  const firstActive = players.findIndex((p) => !p.folded);
+  return {
+    ...state,
+    phase: nextPhase,
+    players,
+    currentBet: 0,
+    activePlayerIndex: firstActive === -1 ? 0 : firstActive,
+    bettingActionsThisRound: 0,
+  };
 }
 
 // ─── High/Low Bet ─────────────────────────────────────────────────────────────

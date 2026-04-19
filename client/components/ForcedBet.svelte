@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { gameState, doForcedBets, doDeal } from '../gameStore';
+  import { gameState, doForcedBets, doDeal, networkMode } from '../gameStore';
 </script>
 
 <section>
@@ -30,13 +30,17 @@
     </tbody>
   </table>
 
-  <button
-    type="button"
-    onclick={() => {
-      doForcedBets();
-      doDeal(1);
-    }}
-  >
-    Collect forced bets &amp; deal
-  </button>
+  {#if $networkMode !== 'peer'}
+    <button
+      type="button"
+      onclick={() => {
+        doForcedBets();
+        doDeal(1);
+      }}
+    >
+      Collect forced bets &amp; deal
+    </button>
+  {:else}
+    <p><em>Waiting for the host to start the round…</em></p>
+  {/if}
 </section>

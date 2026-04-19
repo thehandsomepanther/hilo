@@ -10,8 +10,10 @@
 
   let { player, isActive = false, showSecret = true, showEquations = true }: Props = $props();
 
+  const SUIT_ABBR: Record<string, string> = { Gold: 'G', Silver: 'S', Bronze: 'Br', Black: 'Bl' };
+
   function renderCard(card: Card): string {
-    if (card.kind === 'number') return `${card.value}(${card.suit[0]})`;
+    if (card.kind === 'number') return `${card.value}(${SUIT_ABBR[card.suit]})`;
     return card.operator;
   }
 
@@ -63,8 +65,13 @@
     {/if}
 
     {#if player.lowEquation !== null}
-      <dt>Equation</dt>
+      <dt>Low equation</dt>
       <dd>{showEquations ? `${player.lowEquation} = ${player.lowResult?.toFixed(4)}` : '(hidden)'}</dd>
+    {/if}
+
+    {#if player.highEquation !== null}
+      <dt>High equation</dt>
+      <dd>{showEquations ? `${player.highEquation} = ${player.highResult?.toFixed(4)}` : '(hidden)'}</dd>
     {/if}
   </dl>
 </fieldset>

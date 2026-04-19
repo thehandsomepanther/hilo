@@ -45,16 +45,21 @@ async function dealFaceUpCardsAsync(
     if (card.operator === '×') {
       const snap: Player = { ...player, faceUpCards: [...faceUpCards], personalOperators: [...personalOperators] };
       const decision = await requestDecision(snap);
+      let accepted = false;
       if (decision.accept) {
         const idx = personalOperators.findIndex((op) => op.operator === decision.discard);
-        if (idx !== -1) personalOperators.splice(idx, 1);
-        faceUpCards.push(card);
+        if (idx !== -1) {
+          personalOperators.splice(idx, 1);
+          faceUpCards.push(card);
+          accepted = true;
+        }
+        // If the chosen operator wasn't found, treat as a decline (shouldn't happen in normal play)
       }
       // Player always receives an additional number card regardless of decision
       const { card: num, remaining: rem } = drawNumberCard(currentDeck);
       currentDeck = rem;
       faceUpCards.push(num);
-      return decision.accept;
+      return accepted;
     }
 
     // Any other operator — replace with a number
@@ -104,8 +109,11 @@ async function dealOneMoreAsync(
     const decision = await requestDecision(snap);
     if (decision.accept) {
       const idx = personalOperators.findIndex((op) => op.operator === decision.discard);
-      if (idx !== -1) personalOperators.splice(idx, 1);
-      faceUpCards.push(card);
+      if (idx !== -1) {
+        personalOperators.splice(idx, 1);
+        faceUpCards.push(card);
+      }
+      // If operator not found, treat as decline (shouldn't happen in normal play)
     }
     const { card: num, remaining: rem } = drawNumberCard(currentDeck);
     currentDeck = rem;

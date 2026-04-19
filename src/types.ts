@@ -109,6 +109,8 @@ export type GameState = {
    * or null if the game ended with no clear chip leader (all at zero).
    */
   winnerId: string | null;
+  /** Human-readable log of actions taken this round, in order. */
+  log: string[];
 };
 
 // ─── Results ─────────────────────────────────────────────────────────────────

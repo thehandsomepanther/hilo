@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { isDealing, doDeal } from '../gameStore';
+  import { isDealing, doDeal, networkMode } from '../gameStore';
 
   interface Props {
     phase: 1 | 2;
@@ -12,6 +12,8 @@
 
   {#if $isDealing}
     <p><em>Dealing cards… please wait.</em></p>
+  {:else if $networkMode === 'peer'}
+    <p><em>Waiting for the host to deal…</em></p>
   {:else if phase === 2}
     <p>Each active player will receive one additional face-up card.</p>
     <button type="button" onclick={() => doDeal(2)}>Deal extra card</button>

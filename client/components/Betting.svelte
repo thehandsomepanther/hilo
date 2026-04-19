@@ -77,22 +77,5 @@
     </fieldset>
   {/if}
 
-  <details>
-    <summary>All bets</summary>
-    <table>
-      <thead>
-        <tr><th>Player</th><th>Bet</th><th>Chips</th><th>Status</th></tr>
-      </thead>
-      <tbody>
-        {#each $gameState?.players ?? [] as p}
-          <tr>
-            <td>{p.name}{p.id === activePlayer?.id ? ' ◀' : ''}</td>
-            <td>{p.currentBet}</td>
-            <td>{p.chips}</td>
-            <td>{p.folded ? 'Folded' : 'Active'}</td>
-          </tr>
-        {/each}
-      </tbody>
-    </table>
-  </details>
+
 </section>

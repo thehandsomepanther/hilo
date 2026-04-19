@@ -119,6 +119,12 @@ lobbyState.subscribe((ls) => {
   if (hostNet) hostNet.broadcast({ type: 'lobby', payload: ls });
 });
 
+// ─── Log helper ───────────────────────────────────────────────────────────────
+
+function appendLog(state: GameState, entry: string): GameState {
+  return { ...state, log: [...state.log, entry] };
+}
+
 // ─── Dealing helpers ──────────────────────────────────────────────────────────
 
 /** Called by dealing.ts when a × card is drawn. Sets `pendingDecision` and
@@ -185,7 +191,11 @@ export function doForcedBets(): void {
     peerNet?.send({ type: 'action', payload: { name: 'doForcedBets' } });
     return;
   }
-  gameState.update((s) => (s ? collectForcedBets(s) : null));
+  gameState.update((s) => {
+    if (!s) return null;
+    const next = collectForcedBets(s);
+    return appendLog(next, `Forced bets collected — pot: ${next.pot}`);
+  });
 }
 
 export async function doDeal(phase: 1 | 2): Promise<void> {
@@ -203,7 +213,7 @@ export async function doDeal(phase: 1 | 2): Promise<void> {
       phase === 1
         ? await runDealPhase1Async(state, requestDecision, onUpdate)
         : await runDealPhase2Async(state, requestDecision, onUpdate);
-    gameState.set(next);
+    gameState.set(appendLog(next, `Dealing phase ${phase} complete`));
   } finally {
     isDealing.set(false);
   }
@@ -219,38 +229,59 @@ export function doBettingAction(action: BettingAction): void {
   const state = get(gameState);
   if (!state) return;
 
+  const player = state.players[state.activePlayerIndex];
+  const playerName = player?.name ?? 'Unknown';
+  let logEntry: string;
+  switch (action.type) {
+    case 'check':
+      logEntry = `${playerName} checked`;
+      break;
+    case 'call': {
+      const amount = Math.min((state.currentBet) - (player?.currentBet ?? 0), player?.chips ?? 0);
+      logEntry = `${playerName} called ${amount} chip(s)`;
+      break;
+    }
+    case 'raise':
+      logEntry = `${playerName} raised to ${action.amount}`;
+      break;
+    case 'fold':
+      logEntry = `${playerName} folded`;
+      break;
+  }
+
   const { state: next, roundComplete } = applyBettingAction(state, action);
+  const nextWithLog = appendLog(next, logEntry!);
 
   if (!roundComplete) {
-    gameState.set(next);
+    gameState.set(nextWithLog);
     return;
   }
 
-  const activePlayers = next.players.filter((p) => !p.folded);
+  const activePlayers = nextWithLog.players.filter((p) => !p.folded);
   if (activePlayers.length <= 1) {
-    const resultState: GameState = { ...next, phase: 'results' };
+    const resultState: GameState = { ...nextWithLog, phase: 'results' };
     roundResult.set(resolveRound(resultState));
     gameState.set(resultState);
     return;
   }
 
   const nextPhase = state.phase === 'betting-1' ? 'dealing-2' : 'high-low-bet';
-  gameState.set(resetBettingRound(next, nextPhase));
+  gameState.set(resetBettingRound(nextWithLog, nextPhase));
 }
 
 // ─── Calculation ──────────────────────────────────────────────────────────────
 
 /**
- * Validate an equation for a player and store the result in both low and high
- * slots — players submit a single equation whose result is used for both targets.
- * Returns an error string or null on success.
+ * Validate an equation for a player for the given target (low or high) and store
+ * the result. Returns an error string or null on success.
  */
 export function submitEquation(
   playerId: string,
+  target: 'low' | 'high',
   expression: string,
 ): string | null {
   if (get(networkMode) === 'peer') {
-    peerNet?.send({ type: 'action', payload: { name: 'submitEquation', args: [playerId, expression] } });
+    peerNet?.send({ type: 'action', payload: { name: 'submitEquation', args: [playerId, target, expression] } });
     // Optimistically return null; the host will validate and broadcast the real state
     return null;
   }
@@ -269,10 +300,37 @@ export function submitEquation(
   const result = evaluateEquation(expression, allCards);
   if (!result.ok) return result.error;
 
-  // Store the same result for both low and high — the bet choice determines which pot
-  // each player competes for; resolution uses lowResult for low pot, highResult for high pot.
-  gameState.set(recordEquationResults(state, playerId, result.value, result.value, expression, expression));
+  const low    = target === 'low'  ? result.value      : player.lowResult;
+  const high   = target === 'high' ? result.value      : player.highResult;
+  const lowEq  = target === 'low'  ? expression        : player.lowEquation;
+  const highEq = target === 'high' ? expression        : player.highEquation;
+
+  const updated = recordEquationResults(state, playerId, low, high, lowEq, highEq);
+  const playerName = player.name;
+  const label = target === 'low' ? 'low' : 'high';
+  gameState.set(appendLog(updated, `${playerName} submitted their ${label} equation`));
   return null;
+}
+
+/** Clear a previously submitted equation so the player can revise it. */
+export function unsubmitEquation(playerId: string, target: 'low' | 'high'): void {
+  if (get(networkMode) === 'peer') {
+    peerNet?.send({ type: 'action', payload: { name: 'unsubmitEquation', args: [playerId, target] } });
+    return;
+  }
+  const state = get(gameState);
+  if (!state) return;
+  const player = state.players.find((p) => p.id === playerId);
+  if (!player) return;
+
+  const low    = target === 'low'  ? null : player.lowResult;
+  const high   = target === 'high' ? null : player.highResult;
+  const lowEq  = target === 'low'  ? null : player.lowEquation;
+  const highEq = target === 'high' ? null : player.highEquation;
+
+  const updated = recordEquationResults(state, playerId, low, high, lowEq, highEq);
+  const label = target === 'low' ? 'low' : 'high';
+  gameState.set(appendLog(updated, `${player.name} retracted their ${label} equation`));
 }
 
 export function doAdvanceToBetting2(): void {
@@ -290,28 +348,15 @@ export function doAdvanceToBetting2(): void {
  * resolve the round and advance to results.
  */
 function applyOneChoice(state: GameState, playerId: string, choice: 'high' | 'low' | 'swing'): void {
-  console.log('[applyOneChoice] playerId=%s choice=%s', playerId, choice);
+  const playerName = state.players.find((p) => p.id === playerId)?.name ?? playerId;
   const { state: next, allChosen } = recordBetChoice(state, playerId, choice);
-  console.log('[applyOneChoice] allChosen=%s', allChosen);
+  const withLog = appendLog(next, `${playerName} chose ${choice}`);
   if (allChosen) {
-    try {
-      const resultsState = { ...next, phase: 'results' as const };
-      console.log('[applyOneChoice] calling resolveRound, pot=%d activePlayers=%o',
-        resultsState.pot,
-        resultsState.players.filter(p => !p.folded).map(p => ({ id: p.id, betChoice: p.betChoice, lowResult: p.lowResult, highResult: p.highResult })),
-      );
-      const result = resolveRound(resultsState);
-      console.log('[applyOneChoice] resolveRound ok: lowWinner=%s highWinner=%s payouts=%o',
-        result.lowWinnerId, result.highWinnerId, Object.fromEntries(result.payouts));
-      roundResult.set(result);
-      console.log('[applyOneChoice] roundResult.set done');
-      gameState.set(resultsState);
-      console.log('[applyOneChoice] gameState.set done — phase should now be results');
-    } catch (e) {
-      console.error('[applyOneChoice] THREW:', e);
-    }
+    const resultsState = { ...withLog, phase: 'results' as const };
+    roundResult.set(resolveRound(resultsState));
+    gameState.set(resultsState);
   } else {
-    gameState.set(next);
+    gameState.set(withLog);
   }
 }
 
@@ -345,9 +390,16 @@ export function doSubmitBetChoices(choices: Map<string, Player['betChoice']>): v
   const state = get(gameState);
   if (!state) return;
   const withChoices = applyBetChoices(state, choices);
-  const result = resolveRound(withChoices);
+  const entries = [...choices.entries()]
+    .map(([id, c]) => {
+      const name = state.players.find((p) => p.id === id)?.name ?? id;
+      return `${name} chose ${c}`;
+    })
+    .join('; ');
+  const withLog = appendLog(withChoices, entries);
+  const result = resolveRound(withLog);
   roundResult.set(result);
-  gameState.set(withChoices);
+  gameState.set(withLog);
 }
 
 // ─── Next round ───────────────────────────────────────────────────────────────
@@ -513,7 +565,10 @@ function applyPeerAction(action: SerializedAction): void {
       doBettingAction(action.args[0]);
       break;
     case 'submitEquation':
-      submitEquation(action.args[0], action.args[1]);
+      submitEquation(action.args[0], action.args[1], action.args[2]);
+      break;
+    case 'unsubmitEquation':
+      unsubmitEquation(action.args[0], action.args[1]);
       break;
     case 'doAdvanceToBetting2':
       doAdvanceToBetting2();

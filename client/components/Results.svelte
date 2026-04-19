@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { gameState, roundResult, doNextRound } from '../gameStore';
+  import { gameState, roundResult, doNextRound, networkMode } from '../gameStore';
 
   onMount(() => {
     console.log('[Results] mounted, roundResult=%o gameState.phase=%s',
@@ -47,7 +47,7 @@
         {#if highWinner}
           {@const p = $gameState?.players.find(pl => pl.id === highWinner.id)}
           {highWinner.name}
-          — equation: <code>{p?.lowEquation}</code> = {p?.highResult?.toFixed(4)}
+          — equation: <code>{p?.highEquation}</code> = {p?.highResult?.toFixed(4)}
         {:else}
           No winner (rolled over)
         {/if}
@@ -83,5 +83,9 @@
     <p>Computing results…</p>
   {/if}
 
-  <button type="button" onclick={doNextRound}>Start next round</button>
+  {#if $networkMode !== 'peer'}
+    <button type="button" onclick={doNextRound}>Start next round</button>
+  {:else}
+    <p><em>Waiting for the host to start the next round…</em></p>
+  {/if}
 </section>

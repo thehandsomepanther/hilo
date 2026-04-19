@@ -10,8 +10,15 @@
   import HighLowBet from './components/HighLowBet.svelte';
   import Results from './components/Results.svelte';
   import GameOver from './components/GameOver.svelte';
-  import PlayerHand from './components/PlayerHand.svelte';
   import NetworkLobby from './components/NetworkLobby.svelte';
+  import type { Card } from '../src/types';
+
+  const SUIT_ABBR: Record<string, string> = { Gold: 'G', Silver: 'S', Bronze: 'Br', Black: 'Bl' };
+
+  function renderCard(card: Card): string {
+    if (card.kind === 'number') return `${card.value}(${SUIT_ABBR[card.suit]})`;
+    return card.operator;
+  }
 
   // Bridge Svelte 4 store → Svelte 5 rune so $derived/$effect re-evaluate on store updates.
   // Using $derived($gameState?.phase) does NOT work in runes mode because $derived only
@@ -28,6 +35,12 @@
 
   /** True once the user has finished (or skipped) network setup. */
   let networkConfigured = $state(false);
+
+  // Peers auto-proceed past the lobby as soon as the host starts the game
+  // and broadcasts the first game state.
+  $effect(() => {
+    if (_gs !== null) networkConfigured = true;
+  });
 
   $effect(() => {
     console.log('[App] phase=%s gameState.phase=%s', phase, _gs?.phase ?? 'null');
@@ -60,38 +73,42 @@
 {:else}
   <!-- ── × Card Decision overlay (appears during async dealing) ───────────── -->
   {#if $pendingDecision}
+    {@const isMyDecision = !$localPlayerId || $pendingDecision.player.id === $localPlayerId}
     <section aria-live="assertive">
       <h2>Multiplication Card Decision</h2>
-      <p>
-        <strong>{$pendingDecision.player.name}</strong> drew a
-        <strong>×</strong> card!
-      </p>
-      <p>
-        Accept it by giving up a <strong>+</strong> or <strong>−</strong> card,
-        or decline it. Either way you receive a bonus number card.
-      </p>
-      <fieldset>
-        <legend>Choose an option:</legend>
-        {#if $pendingDecision.player.personalOperators.some((op) => op.operator === '+')}
-          <button
-            type="button"
-            onclick={() => resolveDecision({ accept: true, discard: '+' })}
-          >
-            Accept × — give up +
+      {#if isMyDecision}
+        <p>
+          You drew a <strong>×</strong> card!
+          Accept it by giving up a <strong>+</strong> or <strong>−</strong> card,
+          or decline it. Either way you receive a bonus number card.
+        </p>
+        <fieldset>
+          <legend>Choose an option:</legend>
+          {#if $pendingDecision.player.personalOperators.some((op) => op.operator === '+')}
+            <button
+              type="button"
+              onclick={() => resolveDecision({ accept: true, discard: '+' })}
+            >
+              Accept × — give up +
+            </button>
+          {/if}
+          {#if $pendingDecision.player.personalOperators.some((op) => op.operator === '-')}
+            <button
+              type="button"
+              onclick={() => resolveDecision({ accept: true, discard: '-' })}
+            >
+              Accept × — give up −
+            </button>
+          {/if}
+          <button type="button" onclick={() => resolveDecision({ accept: false })}>
+            Decline ×
           </button>
-        {/if}
-        {#if $pendingDecision.player.personalOperators.some((op) => op.operator === '-')}
-          <button
-            type="button"
-            onclick={() => resolveDecision({ accept: true, discard: '-' })}
-          >
-            Accept × — give up −
-          </button>
-        {/if}
-        <button type="button" onclick={() => resolveDecision({ accept: false })}>
-          Decline ×
-        </button>
-      </fieldset>
+        </fieldset>
+      {:else}
+        <p>
+          <em>Waiting for <strong>{$pendingDecision.player.name}</strong> to decide on their × card…</em>
+        </p>
+      {/if}
     </section>
     <hr />
   {/if}
@@ -119,22 +136,82 @@
     {/if}
   </main>
 
-  <!-- ── Always-visible player hands ───────────────────────────────────────── -->
+  <!-- ── Always-visible player table ──────────────────────────────────────── -->
   {#if $gameState && phase !== 'game-over'}
     <hr />
     <section>
       <h2>{$localPlayerId ? 'Your hand' : 'All players'}</h2>
-      <div>
-        {#each $gameState.players as player}
-          <PlayerHand
-            {player}
-            isActive={player.id === activePlayerId &&
-              (phase === 'betting-1' || phase === 'betting-2')}
-            showSecret={!$localPlayerId || player.id === $localPlayerId}
-            showEquations={!$localPlayerId || player.id === $localPlayerId || phase === 'results' || phase === 'game-over'}
-          />
+      <table>
+        <thead>
+          <tr>
+            <th>Player</th>
+            <th>Chips</th>
+            <th>Bet</th>
+            <th>Secret</th>
+            <th>Face-up cards</th>
+            <th>Operators</th>
+            <th>Bet choice</th>
+            <th>Low equation</th>
+            <th>High equation</th>
+          </tr>
+        </thead>
+        <tbody>
+          {#each $gameState.players as player}
+            {@const isMe = player.id === $localPlayerId}
+            {@const isActive = player.id === activePlayerId && (phase === 'betting-1' || phase === 'betting-2')}
+            {@const showSecret = !$localPlayerId || isMe}
+            {@const showEquations = !$localPlayerId || isMe || phase === 'results'}
+            <tr style={isMe ? 'background-color: #fffbcc; font-weight: bold;' : ''}>
+              <td>
+                {player.name}
+                {#if isActive} ◀{/if}
+                {#if player.folded} (folded){/if}
+              </td>
+              <td>{player.chips}</td>
+              <td>{player.currentBet}</td>
+              <td>{player.secretCard ? (showSecret ? renderCard(player.secretCard) : '?') : '—'}</td>
+              <td>{player.faceUpCards.length ? player.faceUpCards.map(renderCard).join('  ') : '—'}</td>
+              <td>{player.personalOperators.length ? player.personalOperators.map((op) => op.operator).join('  ') : '—'}</td>
+              <td>
+                {#if player.betChoice !== null}
+                  {(!$localPlayerId || isMe || phase === 'results' || phase === 'game-over')
+                    ? player.betChoice
+                    : '(hidden)'}
+                {:else}
+                  —
+                {/if}
+              </td>
+              <td>
+                {#if player.lowEquation !== null}
+                  {showEquations ? `${player.lowEquation} = ${player.lowResult?.toFixed(4)}` : '(hidden)'}
+                {:else}
+                  —
+                {/if}
+              </td>
+              <td>
+                {#if player.highEquation !== null}
+                  {showEquations ? `${player.highEquation} = ${player.highResult?.toFixed(4)}` : '(hidden)'}
+                {:else}
+                  —
+                {/if}
+              </td>
+            </tr>
+          {/each}
+        </tbody>
+      </table>
+    </section>
+  {/if}
+
+  <!-- ── Game log ──────────────────────────────────────────────────────────── -->
+  {#if $gameState && $gameState.log.length > 0 && phase !== 'game-over'}
+    <hr />
+    <section>
+      <h2>Round log</h2>
+      <ol>
+        {#each $gameState.log as entry}
+          <li>{entry}</li>
         {/each}
-      </div>
+      </ol>
     </section>
   {/if}
 {/if}

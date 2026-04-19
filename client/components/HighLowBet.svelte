@@ -36,8 +36,8 @@
     for (const p of activePlayers) {
       if (choices.get(p.id) === 'swing') {
         const player = $gameState?.players.find((x) => x.id === p.id);
-        if (!player?.lowResult || !player?.highResult) {
-          error = `${p.name} chose Swing but hasn't validated both equations.`;
+        if (player?.lowResult === null || player?.lowResult === undefined) {
+          error = `${p.name} chose Swing but hasn't submitted an equation.`;
           return;
         }
       }
@@ -70,8 +70,8 @@
     if (!myPick) { myError = 'Please choose an option first.'; return; }
     if (myPick === 'swing') {
       const me = $gameState?.players.find((p) => p.id === $localPlayerId);
-      if (!me?.lowResult || !me?.highResult) {
-        myError = 'Swing requires both equations to be validated first.';
+      if (me?.lowResult === null || me?.lowResult === undefined) {
+        myError = 'Swing requires an equation to be submitted first.';
         return;
       }
     }
