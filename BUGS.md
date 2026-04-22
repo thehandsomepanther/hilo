@@ -1,4 +1,3 @@
-[x] Calculation phase screen no longer has inputs for operators
-[x] Players are able to bet more chips than some peers have. When peers call, this puts the game in a bad state. Simplify the betting process by limiting bets to the least amount of chips held by any player.
-[x] Non-hosts are able to see the host's bet choice 
-[x] Enable strict null checking for the codebase
+[x] "dealer" should rotate between players
+[x] the minimum bet should increment by one each round (i.e. it should be equal to the round number). if a player has fewer than the minimum bet, then that must go all in, the minimum bet is set to that number, and no other bets can be made that round
+[x] equations of folded players should not be revealed on the results page

@@ -13,7 +13,6 @@ import { resolveRound, applyPayouts } from './results';
 export function createGame(
   playerNames: string[],
   startingChips = 50,
-  forcedBetAmount = 1,
   calculationTimeLimit = 90,
 ): SetupState {
   if (playerNames.length < 2) throw new Error('At least 2 players required');
@@ -34,30 +33,55 @@ export function createGame(
     players,
     deck: shuffle(buildDeck()),
     pot: 0,
-    forcedBetAmount,
+    forcedBetAmount: 1,
     calculationTimeLimit,
     round: 0,
     log: [],
+    dealerIndex: players.length - 1,
+    bettingLocked: false,
   };
 }
 
 // ─── Round initialisation ────────────────────────────────────────────────────
 
+function advanceDealerIndex(players: { chips: number }[], current: number): number {
+  const n = players.length;
+  for (let i = 1; i <= n; i++) {
+    const idx = (current + i) % n;
+    if ((players[idx]?.chips ?? 0) > 0) return idx;
+  }
+  return current;
+}
+
+function firstActiveAfterDealer(players: DealtPlayer[], dealerIndex: number): number {
+  const n = players.length;
+  for (let i = 1; i <= n; i++) {
+    const idx = (dealerIndex + i) % n;
+    if (!players[idx]!.folded) return idx;
+  }
+  return 0;
+}
+
 /**
  * Start a new round from a SetupState (returned by `applyPayouts` or
  * `createGame`).  Players are already reset to UndealPlayer by `applyPayouts`;
- * this just shuffles the deck, increments the round counter, and clears the log.
+ * this shuffles the deck, increments the round counter, advances the dealer,
+ * and sets the forced bet equal to the new round number.
  *
  * Crucially, `pot` is NOT reset here — rollover chips from the previous round
  * (already set in SetupState by `applyPayouts`) carry into the new round.
  */
 export function startRound(state: SetupState): ForcedBetState {
+  const newRound = state.round + 1;
   return {
     ...state,
     phase: 'forced-bet',
     deck: shuffle(buildDeck()),
-    round: state.round + 1,
+    round: newRound,
     log: [],
+    dealerIndex: advanceDealerIndex(state.players, state.dealerIndex),
+    forcedBetAmount: newRound,
+    bettingLocked: false,
   };
 }
 
@@ -70,7 +94,8 @@ export function collectForcedBets(state: ForcedBetState): Dealing1State {
     pot += bet;
     return { ...p, chips: p.chips - bet, currentBet: bet };
   });
-  return { ...state, phase: 'dealing-1', players, pot };
+  const bettingLocked = players.some((p) => p.currentBet < state.forcedBetAmount);
+  return { ...state, phase: 'dealing-1', players, pot, bettingLocked };
 }
 
 // ─── Dealing helpers ──────────────────────────────────────────────────────────
@@ -122,6 +147,7 @@ export function applyBettingAction(
 
   switch (action.type) {
     case 'raise': {
+      if (state.bettingLocked) throw new Error('Betting is locked — a player went all-in on the forced bet');
       if (action.amount <= state.currentBet) throw new Error('Raise must exceed current bet');
       const extra = action.amount - player.currentBet;
       if (extra > player.chips) throw new Error('Not enough chips to raise');
@@ -316,13 +342,12 @@ export function initBettingRound(
   phase: 'betting-1' | 'betting-2',
 ): Betting1State | Betting2State {
   const players = state.players.map((p) => ({ ...p, currentBet: 0 }));
-  const firstActive = players.findIndex((p) => !p.folded);
   return {
     ...state,
     phase,
     players,
     currentBet: 0,
-    activePlayerIndex: firstActive === -1 ? 0 : firstActive,
+    activePlayerIndex: firstActiveAfterDealer(players, state.dealerIndex),
     bettingActionsThisRound: 0,
   } as Betting1State | Betting2State;
 }

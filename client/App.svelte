@@ -163,6 +163,7 @@
             <tr style={(isMe || isActive) ? 'background-color: #fffbcc; font-weight: bold;' : ''}>
               <td>
                 {player.name}
+                {#if $gameState && $gameState.players.indexOf(player) === $gameState.dealerIndex} (D){/if}
                 {#if isActive} ◀{/if}
                 {#if player.folded} (folded){/if}
               </td>

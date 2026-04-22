@@ -83,6 +83,8 @@ function makeBettingState(players: DealtPlayer[], phase: 'betting-1' | 'betting-
     calculationTimeLimit: 90,
     round: 1,
     log: [],
+    dealerIndex: 0,
+    bettingLocked: false,
     activePlayerIndex: 0,
     currentBet: 0,
     bettingActionsThisRound: 0,
@@ -99,6 +101,8 @@ function makeHighLowState(players: DealtPlayer[]): HighLowBetState {
     calculationTimeLimit: 90,
     round: 1,
     log: [],
+    dealerIndex: 0,
+    bettingLocked: false,
   };
 }
 
@@ -110,7 +114,7 @@ describe('createGame', () => {
   });
 
   it('creates correct initial state', () => {
-    const state = createGame(['Alice', 'Bob'], 50, 1);
+    const state = createGame(['Alice', 'Bob'], 50);
     expect(state.players).toHaveLength(2);
     expect(state.players[0]?.chips).toBe(50);
     expect(state.players[0]?.personalOperators).toHaveLength(3);
@@ -154,20 +158,24 @@ describe('startRound', () => {
 
 describe('collectForcedBets', () => {
   it('deducts chips and adds to pot', () => {
-    const state = startRound(createGame(['Alice', 'Bob'], 10, 2));
+    const state = startRound(createGame(['Alice', 'Bob'], 10));
+    // Round 1 → forcedBetAmount = 1
     const next = collectForcedBets(state);
-    expect(next.pot).toBe(4);
-    next.players.forEach((p) => expect(p.chips).toBe(8));
+    expect(next.pot).toBe(2);
+    next.players.forEach((p) => expect(p.chips).toBe(9));
   });
 
   it('goes all-in when chips < forced bet', () => {
-    const state = startRound(createGame(['Alice', 'Bob'], 1, 5));
+    const base = startRound(createGame(['Alice', 'Bob'], 1));
+    // Override forcedBetAmount to simulate a later round
+    const state: ForcedBetState = { ...base, forcedBetAmount: 5 };
     const next = collectForcedBets(state);
     next.players.forEach((p) => {
       expect(p.chips).toBe(0);
       expect(p.currentBet).toBe(1);
     });
     expect(next.pot).toBe(2);
+    expect(next.bettingLocked).toBe(true);
   });
 });
 
@@ -274,7 +282,7 @@ describe('dealing — × card handling', () => {
 
 describe('betting', () => {
   function bettingState() {
-    const base = startRound(createGame(['Alice', 'Bob', 'Charlie'], 50, 1));
+    const base = startRound(createGame(['Alice', 'Bob', 'Charlie'], 50));
     const dealing = collectForcedBets(base);
     return driveDealing(startDealPhase1(dealing));
   }
@@ -472,6 +480,8 @@ describe('advanceFromResults', () => {
       calculationTimeLimit: 90,
       round: 1,
       log: [],
+      dealerIndex: 0,
+      bettingLocked: false,
       result: { kind: 'contested', lowWinnerId: 'a', highWinnerId: 'b', payouts: { a: 10, b: 10 } },
     };
     const next = advanceFromResults(state);
@@ -490,6 +500,8 @@ describe('advanceFromResults', () => {
       calculationTimeLimit: 90,
       round: 1,
       log: [],
+      dealerIndex: 0,
+      bettingLocked: false,
       result: { kind: 'contested', lowWinnerId: 'b', highWinnerId: 'b', payouts: { b: 20 } },
     };
     const next = advanceFromResults(state);
@@ -565,6 +577,8 @@ describe('pot rollover end-to-end', () => {
       calculationTimeLimit: 90,
       round: 1,
       log: [],
+      dealerIndex: 0,
+      bettingLocked: false,
       result: { kind: 'contested', lowWinnerId: null, highWinnerId: 'b', payouts: { b: 10, __rollover__: 5 } },
     };
     const afterPayout = applyPayouts(resultsState);

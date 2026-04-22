@@ -42,7 +42,7 @@ export type HostMsg =
  * Maps 1-to-1 with exported functions in gameStore.ts.
  */
 export type SerializedAction =
-  | { name: 'initGame';            args: [string[], number, number] }
+  | { name: 'initGame';            args: [string[], number] }
   | { name: 'doForcedBets' }
   | { name: 'doDeal';              args: [1 | 2] }
   | { name: 'doBettingAction';     args: [BettingAction] }

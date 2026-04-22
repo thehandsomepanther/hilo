@@ -184,12 +184,12 @@ export function updateLobbyName(index: number, name: string): void {
 
 // ─── Game lifecycle ───────────────────────────────────────────────────────────
 
-export function initGame(playerNames: string[], startingChips: number, forcedBetAmount: number): void {
+export function initGame(playerNames: string[], startingChips: number): void {
   if (get(networkMode) === 'peer') {
-    peerNet?.send({ type: 'action', payload: { name: 'initGame', args: [playerNames, startingChips, forcedBetAmount] } });
+    peerNet?.send({ type: 'action', payload: { name: 'initGame', args: [playerNames, startingChips] } });
     return;
   }
-  const s = createGame(playerNames, startingChips, forcedBetAmount);
+  const s = createGame(playerNames, startingChips);
   gameState.set(startRound(s));
   const idx = get(myPlayerIndex);
   if (idx !== null) localPlayerId.set(`player-${idx}`);

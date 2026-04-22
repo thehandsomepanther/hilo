@@ -80,9 +80,9 @@
           {@const won = payoutFor(player.id)}
           <tr>
             <td>{player.name}{player.folded ? ' (folded)' : ''}</td>
-            <td>{'betChoice' in player ? (player.betChoice ?? '—') : '—'}</td>
-            <td>{'lowResult' in player && player.lowResult !== null ? player.lowResult.toFixed(4) : '—'}</td>
-            <td>{'highResult' in player && player.highResult !== null ? player.highResult.toFixed(4) : '—'}</td>
+            <td>{!player.folded && 'betChoice' in player ? (player.betChoice ?? '—') : '—'}</td>
+            <td>{!player.folded && 'lowResult' in player && player.lowResult !== null ? player.lowResult.toFixed(4) : '—'}</td>
+            <td>{!player.folded && 'highResult' in player && player.highResult !== null ? player.highResult.toFixed(4) : '—'}</td>
             <td>{won}</td>
             <td>{player.chips + won}</td>
           </tr>

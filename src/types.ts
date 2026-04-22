@@ -111,6 +111,13 @@ type BaseState = {
   calculationTimeLimit: number;
   round: number;
   log: string[];
+  /** Index of the current dealer; first to act is the player after this index. */
+  dealerIndex: number;
+  /**
+   * True when a player went all-in on the forced bet this round.
+   * Raises are forbidden while this is set; players may only call or fold.
+   */
+  bettingLocked: boolean;
 };
 
 // Phases share player-array types according to what has been dealt:

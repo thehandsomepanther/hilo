@@ -42,6 +42,9 @@
   <h2>Betting — Phase {$gameState?.phase === 'betting-1' ? 1 : 2}</h2>
 
   <p>Pot: <strong>{bettingState?.pot}</strong> chips | Current bet: <strong>{bettingState?.currentBet}</strong></p>
+  {#if bettingState?.bettingLocked}
+    <p><em>Betting locked — a player went all-in on the forced bet. Call or fold only.</em></p>
+  {/if}
 
   {#if activePlayer}
     {@const isMyTurn = !$localPlayerId || activePlayer.id === $localPlayerId}
@@ -60,22 +63,24 @@
           </button>
         {/if}
 
-        <label>
-          Raise to
-          <input
-            type="number"
-            bind:value={raiseAmount}
-            min={(bettingState?.currentBet ?? 0) + 1}
-            max={maxRaise}
-          />
-        </label>
-        <button
-          type="button"
-          onclick={raise}
-          disabled={raiseAmount <= (bettingState?.currentBet ?? 0)}
-        >
-          Raise
-        </button>
+        {#if !bettingState?.bettingLocked}
+          <label>
+            Raise to
+            <input
+              type="number"
+              bind:value={raiseAmount}
+              min={(bettingState?.currentBet ?? 0) + 1}
+              max={maxRaise}
+            />
+          </label>
+          <button
+            type="button"
+            onclick={raise}
+            disabled={raiseAmount <= (bettingState?.currentBet ?? 0)}
+          >
+            Raise
+          </button>
+        {/if}
 
         <button type="button" onclick={() => doBettingAction({ type: 'fold' })}>Fold</button>
       {:else}

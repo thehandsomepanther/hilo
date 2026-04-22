@@ -1,7 +1,7 @@
 <script lang="ts">
   import {
     lobbyState, myPlayerIndex, networkMode,
-    addPlayer, removePlayer, updateLobbyName, updateStartingChips, updateForcedBetAmount,
+    addPlayer, removePlayer, updateLobbyName, updateStartingChips,
     initGame, addBot,
   } from '../gameStore';
 
@@ -36,7 +36,7 @@
       return;
     }
     error = '';
-    initGame(names, $lobbyState.startingChips, $lobbyState.forcedBetAmount);
+    initGame(names, $lobbyState.startingChips);
   }
 </script>
 
@@ -112,22 +112,14 @@
         />
       </label>
       <br />
-      <label>
-        Forced bet (ante)
-        <input
-          type="number"
-          value={$lobbyState.forcedBetAmount}
-          min="1"
-          oninput={(e) => updateForcedBetAmount(Number((e.target as HTMLInputElement).value))}
-        />
-      </label>
+      <p><em>Forced bet starts at 1 and increases by 1 each round.</em></p>
     </fieldset>
   {:else}
     <!-- Peer: show read-only settings so they know what game they're joining -->
     <fieldset>
       <legend>Settings</legend>
       <p>Starting chips: <strong>{$lobbyState.startingChips}</strong></p>
-      <p>Forced bet (ante): <strong>{$lobbyState.forcedBetAmount}</strong></p>
+      <p>Forced bet increases by 1 each round (round 1 = 1 chip).</p>
     </fieldset>
   {/if}
 
