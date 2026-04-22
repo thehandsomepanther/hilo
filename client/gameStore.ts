@@ -35,8 +35,9 @@ import {
 import { evaluateEquation } from '../src/equation';
 import { startDealPhase1, startDealPhase2 } from './dealing';
 import type { DealStep } from './dealing';
-import { HostNetwork, PeerNetwork } from './network';
+import { HostNetwork, PeerNetwork, generateRoomId } from './network';
 import type { SerializedAction, LobbyState } from './network';
+export { generateRoomId } from './network';
 import { startBotRunner } from './bots/botRunner';
 
 // Re-export types that components need so they never import src/ directly.
@@ -61,12 +62,14 @@ export const pendingDecision = writable<PendingDecision | null>(null);
 
 export const networkMode = writable<'standalone' | 'host' | 'peer'>('standalone');
 
+/** Set to true when the host broadcasts proceedToSetup; peers watch this to auto-advance. */
+export const lobbyProceed = writable(false);
+
 export const localPlayerId = writable<string | null>(null);
 
 export const lobbyState = writable<LobbyState>({
   players: [{ name: '', isBot: false }],
   startingChips: 50,
-  forcedBetAmount: 1,
 });
 
 export const myPlayerIndex = writable<number | null>(null);
@@ -160,9 +163,6 @@ export function updateStartingChips(chips: number): void {
   lobbyState.update((s) => ({ ...s, startingChips: chips }));
 }
 
-export function updateForcedBetAmount(amount: number): void {
-  lobbyState.update((s) => ({ ...s, forcedBetAmount: amount }));
-}
 
 export function addBot(): void {
   lobbyState.update((s) => {
@@ -427,37 +427,33 @@ export function submitBotBetChoice(playerId: string, choice: 'high' | 'low' | 's
 
 // ─── Networking setup ─────────────────────────────────────────────────────────
 
-export async function setupAsHost(peerId: string): Promise<string> {
-  if (!hostNet) {
-    hostNet = new HostNetwork();
-    networkMode.set('host');
-    myPlayerIndex.set(0);
-    lobbyState.update((s) => ({ ...s, players: [{ name: '', isBot: false }] }));
+export function setupAsHost(roomId: string): void {
+  if (hostNet) return;
+  hostNet = new HostNetwork(roomId);
+  networkMode.set('host');
+  myPlayerIndex.set(0);
+  lobbyState.update((s) => ({ ...s, players: [{ name: '', isBot: false }] }));
 
-    hostNet.onMessage = (_pid, msg) => { applyPeerAction(msg.payload); };
+  hostNet.onMessage = (_pid, msg) => { applyPeerAction(msg.payload); };
 
-    hostNet.onConnected = (pid) => {
-      lobbyState.update((ls) => ({ ...ls, players: [...ls.players, { name: '', isBot: false }] }));
-      const currentLobby = get(lobbyState);
-      const peerIndex = currentLobby.players.length - 1;
-      peerPlayerIndex.set(pid, peerIndex);
-      hostNet!.send(pid, { type: 'slotAssignment', payload: { playerIndex: peerIndex } });
-      hostNet!.send(pid, { type: 'lobby', payload: currentLobby });
-      const s = get(gameState);
-      const pd = get(pendingDecision);
-      if (s)  hostNet!.send(pid, { type: 'state', payload: s });
-      if (pd) hostNet!.send(pid, { type: 'pendingDecision', payload: { player: pd.player } });
-    };
-  }
-  return hostNet.createOffer(peerId);
+  hostNet.onConnected = (pid) => {
+    lobbyState.update((ls) => ({ ...ls, players: [...ls.players, { name: '', isBot: false }] }));
+    const currentLobby = get(lobbyState);
+    const peerIndex = currentLobby.players.length - 1;
+    peerPlayerIndex.set(pid, peerIndex);
+    hostNet!.send(pid, { type: 'slotAssignment', payload: { playerIndex: peerIndex } });
+    hostNet!.send(pid, { type: 'lobby', payload: currentLobby });
+    const s = get(gameState);
+    const pd = get(pendingDecision);
+    if (s)  hostNet!.send(pid, { type: 'state', payload: s });
+    if (pd) hostNet!.send(pid, { type: 'pendingDecision', payload: { player: pd.player } });
+  };
+
+  hostNet.start();
 }
 
-export async function acceptPeerAnswer(peerId: string, answerBlob: string): Promise<void> {
-  await hostNet?.acceptAnswer(peerId, answerBlob);
-}
-
-export async function setupAsPeer(offerBlob: string): Promise<string> {
-  peerNet = new PeerNetwork();
+export function setupAsPeer(roomId: string): void {
+  peerNet = new PeerNetwork(roomId);
   networkMode.set('peer');
 
   peerNet.onMessage = (msg) => {
@@ -487,10 +483,18 @@ export async function setupAsPeer(offerBlob: string): Promise<string> {
       case 'slotAssignment':
         myPlayerIndex.set(msg.payload.playerIndex);
         break;
+      case 'proceedToSetup':
+        lobbyProceed.set(true);
+        break;
     }
   };
 
-  return peerNet.connect(offerBlob);
+  peerNet.start();
+}
+
+/** Host calls this when clicking "Done" — signals all peers to advance past the lobby. */
+export function hostProceed(): void {
+  hostNet?.broadcast({ type: 'proceedToSetup' });
 }
 
 export function getConnectedPeerIds(): string[] {

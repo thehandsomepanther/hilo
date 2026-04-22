@@ -1,20 +1,16 @@
 /**
- * network.ts — WebRTC data-channel networking with manual (out-of-band) signaling.
+ * network.ts — WebRTC networking via p2pcf (Cloudflare Worker signalling).
  *
- * No signaling server is involved.  Instead:
- *   1. The host generates one RTCPeerConnection per joining peer and waits for
- *      ICE gathering to finish before exposing the local description as a
- *      base-64 blob the host can share however they like (text, QR code, etc.).
- *   2. Each peer pastes that blob, creates an answer (also waiting for gathering),
- *      and sends the answer blob back to the host.
- *   3. The host applies the answer — the data channel opens and the game is live.
+ * Peers discover each other automatically by sharing a short room code.
+ * No manual SDP blob exchange is required.
  *
- * All communication after that happens over RTCDataChannel messages.
- *
- * GameState is broadcast directly (including embedded RoundResult when in the
- * results phase) — no separate roundResult message is needed.
+ * Authority model is unchanged: the host runs the full game engine and
+ * broadcasts GameState to all peers.  Peers forward serialized actions
+ * to the host.
  */
 
+import P2PCF from 'p2pcf';
+import type { P2PCFPeer } from 'p2pcf';
 import type { GameState, Player, MultiplicationDecision } from '../src/types';
 import type { BettingAction } from '../src/game';
 
@@ -25,7 +21,6 @@ export type LobbyPlayer = { name: string; isBot: boolean };
 export type LobbyState = {
   players: LobbyPlayer[];
   startingChips: number;
-  forcedBetAmount: number;
 };
 
 // ─── Wire message types ───────────────────────────────────────────────────────
@@ -35,7 +30,8 @@ export type HostMsg =
   | { type: 'state'; payload: GameState }
   | { type: 'pendingDecision'; payload: { player: Player } | null }
   | { type: 'lobby'; payload: LobbyState }
-  | { type: 'slotAssignment'; payload: { playerIndex: number } };
+  | { type: 'slotAssignment'; payload: { playerIndex: number } }
+  | { type: 'proceedToSetup' };
 
 /**
  * All game actions a peer can invoke, serialised for network transport.
@@ -58,147 +54,138 @@ export type SerializedAction =
 /** Messages sent from a peer to the host. */
 export type PeerMsg = { type: 'action'; payload: SerializedAction };
 
-// ─── ICE / SDP helpers ───────────────────────────────────────────────────────
+// ─── Encoding helpers ─────────────────────────────────────────────────────────
 
-const ICE_SERVERS: RTCIceServer[] = [
-  { urls: 'stun:stun.l.google.com:19302' },
-  { urls: 'stun:stun1.l.google.com:19302' },
-];
+const enc = new TextEncoder();
+const dec = new TextDecoder();
 
-function sdpToBlob(sdp: RTCSessionDescriptionInit): string {
-  return btoa(JSON.stringify(sdp));
-}
+function encode(s: string): Uint8Array { return enc.encode(s); }
+function decode(b: ArrayBuffer): string { return dec.decode(b); }
 
-function blobToSdp(blob: string): RTCSessionDescriptionInit {
-  return JSON.parse(atob(blob)) as RTCSessionDescriptionInit;
-}
+// ─── Room ID ──────────────────────────────────────────────────────────────────
 
-function waitForGathering(pc: RTCPeerConnection, timeoutMs = 4000): Promise<void> {
-  return new Promise((resolve) => {
-    if (pc.iceGatheringState === 'complete') { resolve(); return; }
-    let settled = false;
-    const done = () => {
-      if (settled) return;
-      settled = true;
-      pc.removeEventListener('icegatheringstatechange', onStateChange);
-      pc.removeEventListener('icecandidate', onCandidate);
-      resolve();
-    };
-    const onStateChange = () => { if (pc.iceGatheringState === 'complete') done(); };
-    const onCandidate = (e: RTCPeerConnectionIceEvent) => { if (e.candidate === null) done(); };
-    pc.addEventListener('icegatheringstatechange', onStateChange);
-    pc.addEventListener('icecandidate', onCandidate);
-    setTimeout(done, timeoutMs);
-  });
+// Unambiguous characters only (no O/0/I/1).
+const ROOM_CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+
+export function generateRoomId(): string {
+  return Array.from(
+    { length: 6 },
+    () => ROOM_CHARS[Math.floor(Math.random() * ROOM_CHARS.length)],
+  ).join('');
 }
 
 // ─── HostNetwork ─────────────────────────────────────────────────────────────
 
-interface PeerEntry {
-  conn: RTCPeerConnection;
-  channel: RTCDataChannel;
-  connected: boolean;
-}
-
+/**
+ * Host-side network.  The host's p2pcf client_id is always 'host' so peers
+ * can identify it unambiguously in the mesh.
+ */
 export class HostNetwork {
-  private peers = new Map<string, PeerEntry>();
+  private p2pcf: P2PCF;
+  private peers = new Map<string, P2PCFPeer>();
 
   onConnected: ((peerId: string) => void) | null = null;
   onMessage: ((peerId: string, msg: PeerMsg) => void) | null = null;
 
-  async createOffer(peerId: string): Promise<string> {
-    const pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
-    const channel = pc.createDataChannel('game', { ordered: true });
-    this.peers.set(peerId, { conn: pc, channel, connected: false });
+  constructor(roomId: string) {
+    this.p2pcf = new P2PCF('host', roomId);
 
-    channel.onmessage = (e) => {
-      if (this.onMessage) this.onMessage(peerId, JSON.parse(e.data as string) as PeerMsg);
-    };
-    channel.onopen = () => {
-      const entry = this.peers.get(peerId);
-      if (entry) entry.connected = true;
-      if (this.onConnected) this.onConnected(peerId);
-    };
+    this.p2pcf.on('peerconnect', (peer) => {
+      this.peers.set(peer.client_id, peer);
+      this.onConnected?.(peer.client_id);
+    });
 
-    const offer = await pc.createOffer();
-    await pc.setLocalDescription(offer);
-    await waitForGathering(pc);
-    return sdpToBlob(pc.localDescription!);
+    this.p2pcf.on('peerclose', (peer) => {
+      this.peers.delete(peer.client_id);
+    });
+
+    this.p2pcf.on('msg', (peer, data) => {
+      const msg = JSON.parse(decode(data)) as PeerMsg;
+      this.onMessage?.(peer.client_id, msg);
+    });
   }
 
-  async acceptAnswer(peerId: string, answerBlob: string): Promise<void> {
-    const entry = this.peers.get(peerId);
-    if (!entry) throw new Error(`Unknown peer: ${peerId}`);
-    await entry.conn.setRemoteDescription(blobToSdp(answerBlob));
+  start(): void {
+    this.p2pcf.start().catch((e) => console.error('[HostNetwork] start error', e));
   }
 
   send(peerId: string, msg: HostMsg): void {
-    const entry = this.peers.get(peerId);
-    if (entry?.channel.readyState === 'open') entry.channel.send(JSON.stringify(msg));
+    const peer = this.peers.get(peerId);
+    if (peer) this.p2pcf.send(peer, encode(JSON.stringify(msg)));
   }
 
   broadcast(msg: HostMsg): void {
-    const data = JSON.stringify(msg);
-    for (const { channel } of this.peers.values()) {
-      if (channel.readyState === 'open') channel.send(data);
-    }
-  }
-
-  getConnectedPeerIds(): string[] {
-    return [...this.peers.entries()].filter(([, e]) => e.connected).map(([id]) => id);
+    this.p2pcf.broadcast(encode(JSON.stringify(msg)));
   }
 
   getPeerIds(): string[] {
     return [...this.peers.keys()];
   }
 
+  getConnectedPeerIds(): string[] {
+    return [...this.peers.keys()];
+  }
+
   close(): void {
-    for (const { conn } of this.peers.values()) conn.close();
+    this.p2pcf.destroy();
     this.peers.clear();
   }
 }
 
 // ─── PeerNetwork ─────────────────────────────────────────────────────────────
 
+/**
+ * Peer-side network.  Each peer gets a random client_id; it discovers the
+ * host by looking for the peer whose client_id is 'host'.
+ */
 export class PeerNetwork {
-  private conn: RTCPeerConnection | null = null;
-  private channel: RTCDataChannel | null = null;
+  private p2pcf: P2PCF;
+  private hostPeer: P2PCFPeer | null = null;
 
   onConnected: (() => void) | null = null;
   onMessage: ((msg: HostMsg) => void) | null = null;
 
-  async connect(offerBlob: string): Promise<string> {
-    const pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
-    this.conn = pc;
+  constructor(roomId: string) {
+    const clientId = Array.from(
+      { length: 8 },
+      () => ROOM_CHARS[Math.floor(Math.random() * ROOM_CHARS.length)],
+    ).join('');
 
-    pc.ondatachannel = (e) => {
-      this.channel = e.channel;
-      e.channel.onmessage = (me) => {
-        if (this.onMessage) this.onMessage(JSON.parse(me.data as string) as HostMsg);
-      };
-      e.channel.onopen = () => {
-        if (this.onConnected) this.onConnected();
-      };
-    };
+    this.p2pcf = new P2PCF(clientId, roomId);
 
-    await pc.setRemoteDescription(blobToSdp(offerBlob));
-    const answer = await pc.createAnswer();
-    await pc.setLocalDescription(answer);
-    await waitForGathering(pc);
-    return sdpToBlob(pc.localDescription!);
+    this.p2pcf.on('peerconnect', (peer) => {
+      if (peer.client_id === 'host') {
+        this.hostPeer = peer;
+        this.onConnected?.();
+      }
+    });
+
+    this.p2pcf.on('peerclose', (peer) => {
+      if (peer.client_id === 'host') this.hostPeer = null;
+    });
+
+    this.p2pcf.on('msg', (peer, data) => {
+      if (peer.client_id === 'host') {
+        const msg = JSON.parse(decode(data)) as HostMsg;
+        this.onMessage?.(msg);
+      }
+    });
+  }
+
+  start(): void {
+    this.p2pcf.start().catch((e) => console.error('[PeerNetwork] start error', e));
   }
 
   send(msg: PeerMsg): void {
-    if (this.channel?.readyState === 'open') this.channel.send(JSON.stringify(msg));
+    if (this.hostPeer) this.p2pcf.send(this.hostPeer, encode(JSON.stringify(msg)));
   }
 
   isConnected(): boolean {
-    return this.channel?.readyState === 'open';
+    return this.hostPeer !== null;
   }
 
   close(): void {
-    this.conn?.close();
-    this.conn = null;
-    this.channel = null;
+    this.p2pcf.destroy();
+    this.hostPeer = null;
   }
 }
