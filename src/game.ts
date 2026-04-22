@@ -14,6 +14,7 @@ export function createGame(
   playerNames: string[],
   startingChips = 50,
   calculationTimeLimit = 90,
+  enforceTimeLimit = false,
 ): SetupState {
   if (playerNames.length < 2) throw new Error('At least 2 players required');
 
@@ -39,6 +40,7 @@ export function createGame(
     log: [],
     dealerIndex: players.length - 1,
     bettingLocked: false,
+    enforceTimeLimit,
   };
 }
 
@@ -293,6 +295,12 @@ export function recordBetChoice(
 ): { state: HighLowBetState; allChosen: boolean } {
   const target = state.players.find((p) => p.id === playerId);
   if (target?.folded) throw new Error(`Folded player ${playerId} cannot make a high/low bet`);
+  if (state.enforceTimeLimit && target) {
+    if ((choice === 'low' || choice === 'swing') && target.lowEquation === null)
+      throw new Error(`${playerId} did not submit a low equation`);
+    if ((choice === 'high' || choice === 'swing') && target.highEquation === null)
+      throw new Error(`${playerId} did not submit a high equation`);
+  }
   const players: DealtPlayer[] = state.players.map((p) =>
     p.id === playerId ? { ...p, betChoice: choice } : p,
   );

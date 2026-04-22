@@ -89,6 +89,10 @@
   {#if $localPlayerId}
     <!-- ── Networked: one player at a time ────────────────────────────────── -->
     {@const me = hlPlayers.find((p) => p.id === $localPlayerId)}
+    {@const enforce = !!$gameState?.enforceTimeLimit}
+    {@const allowLow   = !enforce || (me?.lowEquation  !== null && me?.lowEquation  !== undefined)}
+    {@const allowHigh  = !enforce || (me?.highEquation !== null && me?.highEquation !== undefined)}
+    {@const allowSwing = !enforce || (allowLow && allowHigh)}
     {#if me?.folded}
       <p><em>You folded — waiting for other players to submit their choices…</em></p>
     {:else if mySubmittedChoice === null}
@@ -97,20 +101,23 @@
         <label>
           <input type="radio" name="my-choice" value="low"
             checked={myPick === 'low'}
+            disabled={!allowLow}
             onchange={() => pickOption('low')} />
-          Low (target: 1)
+          Low (target: 1){!allowLow ? ' — no equation submitted' : ''}
         </label>
         <label>
           <input type="radio" name="my-choice" value="high"
             checked={myPick === 'high'}
+            disabled={!allowHigh}
             onchange={() => pickOption('high')} />
-          High (target: 20)
+          High (target: 20){!allowHigh ? ' — no equation submitted' : ''}
         </label>
         <label>
           <input type="radio" name="my-choice" value="swing"
             checked={myPick === 'swing'}
+            disabled={!allowSwing}
             onchange={() => pickOption('swing')} />
-          Swing (both — must win both pots)
+          Swing (both — must win both pots){!allowSwing ? ' — requires both equations' : ''}
         </label>
       </fieldset>
 
@@ -126,28 +133,35 @@
 
   {:else}
     <!-- ── Standalone: all players choose then reveal at once ─────────────── -->
+    {@const enforce = !!$gameState?.enforceTimeLimit}
     {#if !revealed}
       {#each hlPlayers as player}
         {#if !player.folded}
+          {@const allowLow   = !enforce || player.lowEquation  !== null}
+          {@const allowHigh  = !enforce || player.highEquation !== null}
+          {@const allowSwing = !enforce || (allowLow && allowHigh)}
           <fieldset>
             <legend>{player.name}</legend>
             <label>
               <input type="radio" name="choice-{player.id}" value="low"
                 checked={choices.get(player.id) === 'low'}
+                disabled={!allowLow}
                 onchange={() => setChoice(player.id, 'low')} />
-              Low (target: 1)
+              Low (target: 1){!allowLow ? ' — no equation submitted' : ''}
             </label>
             <label>
               <input type="radio" name="choice-{player.id}" value="high"
                 checked={choices.get(player.id) === 'high'}
+                disabled={!allowHigh}
                 onchange={() => setChoice(player.id, 'high')} />
-              High (target: 20)
+              High (target: 20){!allowHigh ? ' — no equation submitted' : ''}
             </label>
             <label>
               <input type="radio" name="choice-{player.id}" value="swing"
                 checked={choices.get(player.id) === 'swing'}
+                disabled={!allowSwing}
                 onchange={() => setChoice(player.id, 'swing')} />
-              Swing (both — must win both pots)
+              Swing (both — must win both pots){!allowSwing ? ' — requires both equations' : ''}
             </label>
           </fieldset>
         {/if}

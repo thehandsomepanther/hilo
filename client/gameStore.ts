@@ -30,8 +30,9 @@ import {
   applyBettingAction, advanceFromBetting,
   applyBetChoices, recordBetChoice, advanceFromHighLowBet,
   recordEquationResults, checkGameOver,
-  advanceFromResults,
+  advanceFromResults, initBettingRound,
 } from '../src/game';
+import type { RoundResult } from '../src/types';
 import { evaluateEquation } from '../src/equation';
 import { startDealPhase1, startDealPhase2 } from './dealing';
 import type { DealStep } from './dealing';
@@ -70,6 +71,7 @@ export const localPlayerId = writable<string | null>(null);
 export const lobbyState = writable<LobbyState>({
   players: [{ name: '', isBot: false }],
   startingChips: 50,
+  enforceTimeLimit: false,
 });
 
 export const myPlayerIndex = writable<number | null>(null);
@@ -163,6 +165,10 @@ export function updateStartingChips(chips: number): void {
   lobbyState.update((s) => ({ ...s, startingChips: chips }));
 }
 
+export function updateEnforceTimeLimit(enforce: boolean): void {
+  lobbyState.update((s) => ({ ...s, enforceTimeLimit: enforce }));
+}
+
 
 export function addBot(): void {
   lobbyState.update((s) => {
@@ -184,12 +190,12 @@ export function updateLobbyName(index: number, name: string): void {
 
 // ─── Game lifecycle ───────────────────────────────────────────────────────────
 
-export function initGame(playerNames: string[], startingChips: number): void {
+export function initGame(playerNames: string[], startingChips: number, enforceTimeLimit: boolean): void {
   if (get(networkMode) === 'peer') {
-    peerNet?.send({ type: 'action', payload: { name: 'initGame', args: [playerNames, startingChips] } });
+    peerNet?.send({ type: 'action', payload: { name: 'initGame', args: [playerNames, startingChips, enforceTimeLimit] } });
     return;
   }
-  const s = createGame(playerNames, startingChips);
+  const s = createGame(playerNames, startingChips, 90, enforceTimeLimit);
   gameState.set(startRound(s));
   const idx = get(myPlayerIndex);
   if (idx !== null) localPlayerId.set(`player-${idx}`);
@@ -342,17 +348,47 @@ export function doAdvanceToBetting2(): void {
   }
   const state = get(gameState);
   if (!state || state.phase !== 'calculation') return;
-  const calcState = state as CalculationState;
-  const firstActive = calcState.players.findIndex((p) => !p.folded);
-  const betting2State = {
-    ...calcState,
-    phase: 'betting-2' as const,
-    players: calcState.players.map((p) => ({ ...p, currentBet: 0 })),
-    currentBet: 0,
-    activePlayerIndex: firstActive === -1 ? 0 : firstActive,
-    bettingActionsThisRound: 0,
+  gameState.set(initBettingRound(state as CalculationState, 'betting-2'));
+}
+
+/**
+ * Enforce the calculation time limit: fold players with no equations, then
+ * advance to betting-2.  If only one player survives, jump straight to results.
+ * Only runs on the host / standalone side.
+ */
+export function expireCalculationPhase(): void {
+  if (get(networkMode) === 'peer') return;
+  const state = get(gameState);
+  if (!state || state.phase !== 'calculation') return;
+  const cs = state as CalculationState;
+
+  const players = cs.players.map((p) => {
+    if (p.folded || p.lowEquation !== null || p.highEquation !== null) return p;
+    return { ...p, folded: true };
+  });
+
+  const foldedNames = cs.players
+    .filter((p, i) => !p.folded && players[i]!.folded)
+    .map((p) => p.name);
+  let updated: CalculationState = {
+    ...cs,
+    players,
+    log: foldedNames.length > 0
+      ? [...cs.log, `Time expired — ${foldedNames.join(', ')} folded (no equations submitted)`]
+      : cs.log,
   };
-  gameState.set(betting2State);
+
+  const active = players.filter((p) => !p.folded);
+  if (active.length <= 1) {
+    const winner = active[0];
+    const result: RoundResult = winner
+      ? { kind: 'last-player-standing', winnerId: winner.id, payout: updated.pot }
+      : { kind: 'contested', lowWinnerId: null, highWinnerId: null, payouts: { __rollover__: updated.pot } };
+    gameState.set({ ...updated, phase: 'results', result });
+    return;
+  }
+
+  gameState.set(initBettingRound(updated, 'betting-2'));
 }
 
 // ─── High/Low Bet ─────────────────────────────────────────────────────────────

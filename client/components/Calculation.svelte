@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onDestroy } from 'svelte';
-  import { gameState, submitEquation, unsubmitEquation, doAdvanceToBetting2, localPlayerId, networkMode } from '../gameStore';
+  import { gameState, submitEquation, unsubmitEquation, doAdvanceToBetting2, expireCalculationPhase, localPlayerId, networkMode } from '../gameStore';
   import type { Card, DealtPlayer } from '../gameStore';
 
   // ─── Token helpers ────────────────────────────────────────────────────────
@@ -158,8 +158,27 @@
   // ─── Timer ────────────────────────────────────────────────────────────────
 
   let remaining = $state(($gameState?.phase === 'calculation' ? $gameState.calculationTimeLimit : null) ?? 90);
+  let timerExpired = $state(false);
   const interval = setInterval(() => { remaining = Math.max(0, remaining - 1); }, 1000);
   onDestroy(() => clearInterval(interval));
+
+  $effect(() => {
+    if (remaining === 0 && !timerExpired && $gameState?.phase === 'calculation' && $gameState.enforceTimeLimit) {
+      timerExpired = true;
+      // Auto-submit any filled-but-not-yet-submitted equations before expiry.
+      for (const player of calcPlayers) {
+        if (player.folded) continue;
+        if ($localPlayerId && player.id !== $localPlayerId) continue;
+        for (const target of ['low', 'high'] as const) {
+          const alreadySubmitted = target === 'low' ? player.lowEquation !== null : player.highEquation !== null;
+          if (alreadySubmitted) continue;
+          const eq = playerStates[player.id]?.[target];
+          if (eq && allFilled(eq.slots)) validate(player.id, target);
+        }
+      }
+      if ($networkMode !== 'peer') expireCalculationPhase();
+    }
+  });
 </script>
 
 <section>
@@ -259,10 +278,13 @@
   {/each}
 
   {#if $networkMode !== 'peer'}
-    {@const allSubmitted = calcPlayers
-      .filter(p => !p.folded)
-      .every(p => p.lowEquation !== null && p.highEquation !== null)}
-    <button type="button" onclick={doAdvanceToBetting2} disabled={!allSubmitted}>
+    {@const enforce = !!$gameState?.enforceTimeLimit}
+    {@const allSubmitted = calcPlayers.filter(p => !p.folded).every(p => p.lowEquation !== null && p.highEquation !== null)}
+    <button
+      type="button"
+      onclick={() => enforce ? expireCalculationPhase() : doAdvanceToBetting2()}
+      disabled={!enforce && !allSubmitted}
+    >
       Proceed to Betting Phase 2
     </button>
     <button type="button" onclick={debugFillAll} style="opacity:0.6;margin-left:1rem">

@@ -118,6 +118,11 @@ type BaseState = {
    * Raises are forbidden while this is set; players may only call or fold.
    */
   bettingLocked: boolean;
+  /**
+   * When true, players who fail to submit an equation before the time limit
+   * are banned from betting on that pot.  Players with no equations are folded.
+   */
+  enforceTimeLimit: boolean;
 };
 
 // Phases share player-array types according to what has been dealt:

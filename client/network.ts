@@ -21,6 +21,7 @@ export type LobbyPlayer = { name: string; isBot: boolean };
 export type LobbyState = {
   players: LobbyPlayer[];
   startingChips: number;
+  enforceTimeLimit: boolean;
 };
 
 // ─── Wire message types ───────────────────────────────────────────────────────
@@ -38,7 +39,7 @@ export type HostMsg =
  * Maps 1-to-1 with exported functions in gameStore.ts.
  */
 export type SerializedAction =
-  | { name: 'initGame';            args: [string[], number] }
+  | { name: 'initGame';            args: [string[], number, boolean] }
   | { name: 'doForcedBets' }
   | { name: 'doDeal';              args: [1 | 2] }
   | { name: 'doBettingAction';     args: [BettingAction] }

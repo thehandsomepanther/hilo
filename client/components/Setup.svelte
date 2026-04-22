@@ -1,7 +1,7 @@
 <script lang="ts">
   import {
     lobbyState, myPlayerIndex, networkMode,
-    addPlayer, removePlayer, updateLobbyName, updateStartingChips,
+    addPlayer, removePlayer, updateLobbyName, updateStartingChips, updateEnforceTimeLimit,
     initGame, addBot,
   } from '../gameStore';
 
@@ -36,7 +36,7 @@
       return;
     }
     error = '';
-    initGame(names, $lobbyState.startingChips);
+    initGame(names, $lobbyState.startingChips, $lobbyState.enforceTimeLimit);
   }
 </script>
 
@@ -112,6 +112,15 @@
         />
       </label>
       <br />
+      <label>
+        <input
+          type="checkbox"
+          checked={$lobbyState.enforceTimeLimit}
+          onchange={(e) => updateEnforceTimeLimit((e.target as HTMLInputElement).checked)}
+        />
+        Enforce time limit (players who miss the deadline cannot bet on unsubmitted pots)
+      </label>
+      <br />
       <p><em>Forced bet starts at 1 and increases by 1 each round.</em></p>
     </fieldset>
   {:else}
@@ -119,6 +128,7 @@
     <fieldset>
       <legend>Settings</legend>
       <p>Starting chips: <strong>{$lobbyState.startingChips}</strong></p>
+      <p>Time limit enforcement: <strong>{$lobbyState.enforceTimeLimit ? 'on' : 'off'}</strong></p>
       <p>Forced bet increases by 1 each round (round 1 = 1 chip).</p>
     </fieldset>
   {/if}
