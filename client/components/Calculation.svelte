@@ -282,8 +282,8 @@
     {@const allSubmitted = calcPlayers.filter(p => !p.folded).every(p => p.lowEquation !== null && p.highEquation !== null)}
     <button
       type="button"
-      onclick={() => enforce ? expireCalculationPhase() : doAdvanceToBetting2()}
-      disabled={!enforce && !allSubmitted}
+      onclick={doAdvanceToBetting2}
+      disabled={!allSubmitted}
     >
       Proceed to Betting Phase 2
     </button>
