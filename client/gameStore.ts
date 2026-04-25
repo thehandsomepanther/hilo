@@ -463,9 +463,9 @@ export function submitBotBetChoice(playerId: string, choice: 'high' | 'low' | 's
 
 // ─── Networking setup ─────────────────────────────────────────────────────────
 
-export function setupAsHost(roomId: string): void {
+export function setupAsHost(roomId: string, workerUrl?: string): void {
   if (hostNet) return;
-  hostNet = new HostNetwork(roomId);
+  hostNet = new HostNetwork(roomId, workerUrl);
   networkMode.set('host');
   myPlayerIndex.set(0);
   lobbyState.update((s) => ({ ...s, players: [{ name: '', isBot: false }] }));
@@ -488,8 +488,8 @@ export function setupAsHost(roomId: string): void {
   hostNet.start();
 }
 
-export function setupAsPeer(roomId: string): void {
-  peerNet = new PeerNetwork(roomId);
+export function setupAsPeer(roomId: string, workerUrl?: string): void {
+  peerNet = new PeerNetwork(roomId, workerUrl);
   networkMode.set('peer');
 
   peerNet.onMessage = (msg) => {

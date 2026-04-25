@@ -7,13 +7,25 @@
   type Mode = 'choose' | 'host' | 'peer';
   let mode = $state<Mode>('choose');
 
+  let workerUrl = $state(localStorage.getItem('workerUrl') ?? '');
+  $effect(() => { localStorage.setItem('workerUrl', workerUrl); });
+
   // ─── Host state ───────────────────────────────────────────────────────────────
 
   let roomId = $state('');
 
+  const inviteUrl = $derived.by(() => {
+    if (!roomId) return '';
+    const url = new URL(window.location.href);
+    url.search = '';
+    url.searchParams.set('room', roomId);
+    if (workerUrl.trim()) url.searchParams.set('worker', workerUrl.trim());
+    return url.toString();
+  });
+
   function hostGame() {
     roomId = generateRoomId();
-    setupAsHost(roomId);
+    setupAsHost(roomId, workerUrl.trim() || undefined);
     mode = 'host';
   }
 
@@ -37,7 +49,22 @@
     if (code.length < 4) { peerError = 'Enter the room code from the host.'; return; }
     peerError = '';
     peerJoined = true;
-    setupAsPeer(code);
+    setupAsPeer(code, workerUrl.trim() || undefined);
+  }
+
+  // ─── Auto-join from invite URL ────────────────────────────────────────────────
+
+  const params = new URLSearchParams(window.location.search);
+  const roomParam = params.get('room');
+  if (roomParam) {
+    const workerParam = params.get('worker') ?? '';
+    workerUrl = workerParam;
+    roomInput = roomParam.toUpperCase();
+    mode = 'peer';
+    peerJoined = true;
+    setupAsPeer(roomParam.toUpperCase(), workerParam || undefined);
+    // Clean up URL bar without adding a history entry.
+    history.replaceState(null, '', window.location.pathname);
   }
 
   // ─── Clipboard helper ────────────────────────────────────────────────────────
@@ -63,6 +90,20 @@
       <strong>Host</strong> creates a room and shares the code with other players.
       <strong>Join</strong> connects to an existing host using their room code.
     </p>
+    <details>
+      <summary>Advanced</summary>
+      <label>
+        Custom worker URL (optional)
+        <br />
+        <input
+          type="url"
+          bind:value={workerUrl}
+          placeholder="https://your-worker.workers.dev"
+          style="width: 24em;"
+        />
+      </label>
+    </details>
+    <br />
     <button type="button" onclick={hostGame}>Host a game</button>
     <button type="button" onclick={() => { mode = 'peer'; }}>Join a game</button>
     <button type="button" onclick={oncomplete}>Play without networking</button>
@@ -73,6 +114,7 @@
 
     <p style="font-size: 2em; font-weight: bold; letter-spacing: 0.15em;">{roomId}</p>
     <button type="button" onclick={() => copyToClipboard(roomId)}>Copy code</button>
+    <button type="button" onclick={() => copyToClipboard(inviteUrl)}>Copy invite link</button>
     {#if copyFeedback}<span aria-live="polite"> {copyFeedback}</span>{/if}
 
     <p>

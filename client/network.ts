@@ -39,18 +39,18 @@ export type HostMsg =
  * Maps 1-to-1 with exported functions in gameStore.ts.
  */
 export type SerializedAction =
-  | { name: 'initGame';            args: [string[], number, boolean] }
+  | { name: 'initGame'; args: [string[], number, boolean] }
   | { name: 'doForcedBets' }
-  | { name: 'doDeal';              args: [1 | 2] }
-  | { name: 'doBettingAction';     args: [BettingAction] }
-  | { name: 'submitEquation';      args: [string, 'low' | 'high', string] }
-  | { name: 'unsubmitEquation';    args: [string, 'low' | 'high'] }
+  | { name: 'doDeal'; args: [1 | 2] }
+  | { name: 'doBettingAction'; args: [BettingAction] }
+  | { name: 'submitEquation'; args: [string, 'low' | 'high', string] }
+  | { name: 'unsubmitEquation'; args: [string, 'low' | 'high'] }
   | { name: 'doAdvanceToBetting2' }
-  | { name: 'doSubmitBetChoices';  args: [Record<string, 'high' | 'low' | 'swing' | null>] }
+  | { name: 'doSubmitBetChoices'; args: [Record<string, 'high' | 'low' | 'swing' | null>] }
   | { name: 'doNextRound' }
-  | { name: 'resolveDecision';     args: [MultiplicationDecision] }
-  | { name: 'updateLobbyName';     args: [number, string] }
-  | { name: 'submitMyBetChoice';   args: [string, 'high' | 'low' | 'swing'] };
+  | { name: 'resolveDecision'; args: [MultiplicationDecision] }
+  | { name: 'updateLobbyName'; args: [number, string] }
+  | { name: 'submitMyBetChoice'; args: [string, 'high' | 'low' | 'swing'] };
 
 /** Messages sent from a peer to the host. */
 export type PeerMsg = { type: 'action'; payload: SerializedAction };
@@ -88,8 +88,8 @@ export class HostNetwork {
   onConnected: ((peerId: string) => void) | null = null;
   onMessage: ((peerId: string, msg: PeerMsg) => void) | null = null;
 
-  constructor(roomId: string) {
-    this.p2pcf = new P2PCF('host', roomId);
+  constructor(roomId: string, workerUrl?: string) {
+    this.p2pcf = new P2PCF('host', roomId, { workerUrl: workerUrl });
 
     this.p2pcf.on('peerconnect', (peer) => {
       this.peers.set(peer.client_id, peer);
@@ -146,13 +146,13 @@ export class PeerNetwork {
   onConnected: (() => void) | null = null;
   onMessage: ((msg: HostMsg) => void) | null = null;
 
-  constructor(roomId: string) {
+  constructor(roomId: string, workerUrl?: string) {
     const clientId = Array.from(
       { length: 8 },
       () => ROOM_CHARS[Math.floor(Math.random() * ROOM_CHARS.length)],
     ).join('');
 
-    this.p2pcf = new P2PCF(clientId, roomId);
+    this.p2pcf = new P2PCF(clientId, roomId, { workerUrl: workerUrl });
 
     this.p2pcf.on('peerconnect', (peer) => {
       if (peer.client_id === 'host') {
