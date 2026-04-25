@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onDestroy } from 'svelte';
-  import { gameState, submitEquation, unsubmitEquation, doAdvanceToBetting2, expireCalculationPhase, localPlayerId, networkMode } from '../gameStore';
+  import { gameState, submitEquation, unsubmitEquation, doAdvanceToBetting2, expireCalculationPhase, setPlayerReady, localPlayerId, networkMode } from '../gameStore';
   import type { Card, DealtPlayer } from '../gameStore';
 
   // ─── Token helpers ────────────────────────────────────────────────────────
@@ -176,6 +176,12 @@
           if (eq && allFilled(eq.slots)) validate(player.id, target);
         }
       }
+      // Auto-ready any player who has both equations (enforcement bypasses the manual ready step).
+      for (const player of calcPlayers) {
+        if (player.folded) continue;
+        if ($localPlayerId && player.id !== $localPlayerId) continue;
+        if (player.lowEquation !== null && player.highEquation !== null) setPlayerReady(player.id);
+      }
       if ($networkMode !== 'peer') expireCalculationPhase();
     }
   });
@@ -256,14 +262,28 @@
 
           {@render equationBuilder('low',  'Low equation (target: 1)',  player.lowEquation,  player.lowResult)}
           {@render equationBuilder('high', 'High equation (target: 20)', player.highEquation, player.highResult)}
+
+          {#if $gameState?.phase === 'calculation' && $gameState.readyPlayerIds.includes(player.id)}
+            <p><strong>✓ Ready</strong></p>
+          {:else}
+            <button
+              type="button"
+              disabled={!(player.lowEquation !== null && player.highEquation !== null)}
+              onclick={() => setPlayerReady(player.id)}
+            >
+              Ready
+            </button>
+          {/if}
         </fieldset>
       {:else}
         <!-- Read-only status for other players — equations hidden until results -->
         <fieldset>
           <legend>{player.name}</legend>
           <p>
-            {#if player.lowEquation !== null && player.highEquation !== null}
-              Both equations submitted.
+            {#if $gameState?.phase === 'calculation' && $gameState.readyPlayerIds.includes(player.id)}
+              Ready ✓
+            {:else if player.lowEquation !== null && player.highEquation !== null}
+              Both equations submitted, not yet ready…
             {:else if player.lowEquation !== null}
               Low submitted, waiting on high…
             {:else if player.highEquation !== null}
@@ -278,12 +298,11 @@
   {/each}
 
   {#if $networkMode !== 'peer'}
-    {@const enforce = !!$gameState?.enforceTimeLimit}
-    {@const allSubmitted = calcPlayers.filter(p => !p.folded).every(p => p.lowEquation !== null && p.highEquation !== null)}
+    {@const allReady = calcPlayers.filter(p => !p.folded).every(p => $gameState?.phase === 'calculation' && $gameState.readyPlayerIds.includes(p.id))}
     <button
       type="button"
       onclick={doAdvanceToBetting2}
-      disabled={!allSubmitted}
+      disabled={!allReady}
     >
       Proceed to Betting Phase 2
     </button>

@@ -341,6 +341,19 @@ export function unsubmitEquation(playerId: string, target: 'low' | 'high'): void
   gameState.set(appendLog(updated, `${player.name} retracted their ${target} equation`));
 }
 
+export function setPlayerReady(playerId: string): void {
+  if (get(networkMode) === 'peer') {
+    peerNet?.send({ type: 'action', payload: { name: 'setPlayerReady', args: [playerId] } });
+    return;
+  }
+  gameState.update((s) => {
+    if (!s || s.phase !== 'calculation') return s;
+    const cs = s as CalculationState;
+    if (cs.readyPlayerIds.includes(playerId)) return s;
+    return { ...cs, readyPlayerIds: [...cs.readyPlayerIds, playerId] };
+  });
+}
+
 export function doAdvanceToBetting2(): void {
   if (get(networkMode) === 'peer') {
     peerNet?.send({ type: 'action', payload: { name: 'doAdvanceToBetting2' } });
@@ -396,10 +409,16 @@ export function expireCalculationPhase(): void {
 function applyOneChoice(state: HighLowBetState, playerId: string, choice: 'high' | 'low' | 'swing'): void {
   const player = state.players.find((p) => p.id === playerId);
   if (!player || player.folded) return;
-  const playerName = player.name;
   const { state: next, allChosen } = recordBetChoice(state, playerId, choice);
-  const withLog = appendLog(next, `${playerName} chose ${choice}`) as HighLowBetState;
-  gameState.set(allChosen ? advanceFromHighLowBet(withLog) : withLog);
+  const pending = appendLog(next, `${player.name} submitted their bet`) as HighLowBetState;
+  if (!allChosen) { gameState.set(pending); return; }
+  // All players have chosen — now safe to reveal choices in the log.
+  const summary = pending.players
+    .filter((p) => !p.folded && p.betChoice !== null)
+    .map((p) => `${p.name} chose ${p.betChoice}`)
+    .join('; ');
+  const withLog = appendLog(pending, summary) as HighLowBetState;
+  gameState.set(advanceFromHighLowBet(withLog));
 }
 
 export function submitMyBetChoice(choice: 'high' | 'low' | 'swing'): void {
@@ -563,5 +582,6 @@ function applyPeerAction(action: SerializedAction): void {
       if (state?.phase === 'high-low-bet') applyOneChoice(state as HighLowBetState, action.args[0], action.args[1]);
       break;
     }
+    case 'setPlayerReady': setPlayerReady(action.args[0]); break;
   }
 }

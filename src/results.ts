@@ -41,20 +41,49 @@ function compareLowTie(a: DealtPlayer, b: DealtPlayer): number {
   return bMinSuitRank - aMinSuitRank;
 }
 
+function suitName(rank: number, rankTable: Record<string, number>): string {
+  return Object.entries(rankTable).find(([, r]) => r === rank)![0];
+}
+
+function describeTiebreak(winner: DealtPlayer, rival: DealtPlayer, target: 1 | 20): string {
+  const wCards = numberCards(winner);
+  const rCards = numberCards(rival);
+  if (target === 20) {
+    const wMax = Math.max(...wCards.map((c) => c.value));
+    const rMax = Math.max(...rCards.map((c) => c.value));
+    if (wMax !== rMax) return `Tiebreak by highest card: ${wMax} beats ${rMax}`;
+    const wSuitRank = Math.max(...wCards.filter((c) => c.value === wMax).map((c) => SUIT_RANK_HIGH[c.suit]));
+    const rSuitRank = Math.max(...rCards.filter((c) => c.value === rMax).map((c) => SUIT_RANK_HIGH[c.suit]));
+    return `Tiebreak by suit of highest card (both ${wMax}): ${suitName(wSuitRank, SUIT_RANK_HIGH)} beats ${suitName(rSuitRank, SUIT_RANK_HIGH)}`;
+  } else {
+    const wMin = Math.min(...wCards.map((c) => c.value));
+    const rMin = Math.min(...rCards.map((c) => c.value));
+    if (wMin !== rMin) return `Tiebreak by lowest card: ${wMin} beats ${rMin}`;
+    const wSuitRank = Math.max(...wCards.filter((c) => c.value === wMin).map((c) => SUIT_RANK_LOW[c.suit]));
+    const rSuitRank = Math.max(...rCards.filter((c) => c.value === rMin).map((c) => SUIT_RANK_LOW[c.suit]));
+    return `Tiebreak by suit of lowest card (both ${wMin}): ${suitName(wSuitRank, SUIT_RANK_LOW)} beats ${suitName(rSuitRank, SUIT_RANK_LOW)}`;
+  }
+}
+
 // ─── Winner selection ─────────────────────────────────────────────────────────
 
-function findWinner(candidates: DealtPlayer[], target: 1 | 20): DealtPlayer | null {
-  if (candidates.length === 0) return null;
+function findWinner(candidates: DealtPlayer[], target: 1 | 20): { winner: DealtPlayer | null; tiebreak: string | null } {
+  if (candidates.length === 0) return { winner: null, tiebreak: null };
   const getResult = (p: DealtPlayer): number =>
     target === 1 ? (p.lowResult ?? Infinity) : (p.highResult ?? Infinity);
   const tieBreak = target === 20 ? compareHighTie : compareLowTie;
-  return candidates.reduce<DealtPlayer>((best, p) => {
+  const winner = candidates.reduce<DealtPlayer>((best, p) => {
     const bestClose = closenessToTarget(getResult(best), target);
     const pClose = closenessToTarget(getResult(p), target);
     if (pClose < bestClose) return p;
     if (pClose > bestClose) return best;
     return tieBreak(best, p) <= 0 ? best : p;
   }, candidates[0] as DealtPlayer);
+
+  const winClose = closenessToTarget(getResult(winner), target);
+  const rival = candidates.find((p) => p !== winner && closenessToTarget(getResult(p), target) === winClose);
+  const tiebreak = rival ? describeTiebreak(winner, rival, target) : null;
+  return { winner, tiebreak };
 }
 
 // ─── Round resolution ─────────────────────────────────────────────────────────
@@ -81,8 +110,8 @@ export function resolveRound(state: { players: DealtPlayer[]; pot: number }): Ro
   const lowCandidates  = active.filter((p) => (p.betChoice === 'low'  || p.betChoice === 'swing') && p.lowResult  !== null);
   const highCandidates = active.filter((p) => (p.betChoice === 'high' || p.betChoice === 'swing') && p.highResult !== null);
 
-  const lowWinner  = findWinner(lowCandidates,  1);
-  const highWinner = findWinner(highCandidates, 20);
+  const { winner: lowWinner,  tiebreak: lowTiebreak  } = findWinner(lowCandidates,  1);
+  const { winner: highWinner, tiebreak: highTiebreak } = findWinner(highCandidates, 20);
 
   const payouts: Record<string, number> = {};
   const award = (id: string, amount: number): void => {
@@ -99,14 +128,14 @@ export function resolveRound(state: { players: DealtPlayer[]; pot: number }): Ro
     if (lowWinner === null) return null;
     if (lowWinner.betChoice !== 'swing') return lowWinner;
     if (swingWonBoth) return lowWinner;
-    return findWinner(lowCandidates.filter((p) => p.betChoice !== 'swing'), 1);
+    return findWinner(lowCandidates.filter((p) => p.betChoice !== 'swing'), 1).winner;
   })();
 
   const effectiveHighWinner: DealtPlayer | null = (() => {
     if (highWinner === null) return null;
     if (highWinner.betChoice !== 'swing') return highWinner;
     if (swingWonBoth) return highWinner;
-    return findWinner(highCandidates.filter((p) => p.betChoice !== 'swing'), 20);
+    return findWinner(highCandidates.filter((p) => p.betChoice !== 'swing'), 20).winner;
   })();
 
   if (effectiveLowWinner)  { award(effectiveLowWinner.id,  lowHalf);  }
@@ -119,6 +148,8 @@ export function resolveRound(state: { players: DealtPlayer[]; pot: number }): Ro
     lowWinnerId:  effectiveLowWinner?.id  ?? null,
     highWinnerId: effectiveHighWinner?.id ?? null,
     payouts,
+    lowTiebreak,
+    highTiebreak,
   };
 }
 

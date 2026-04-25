@@ -89,6 +89,8 @@ export type RoundResult =
       lowWinnerId: string | null;
       highWinnerId: string | null;
       payouts: Record<string, number>;
+      lowTiebreak?: string | null;
+      highTiebreak?: string | null;
     };
 
 // ─── Multiplication decision ──────────────────────────────────────────────────
@@ -152,7 +154,7 @@ export type Betting2State    = PostDealState & {
   bettingActionsThisRound: number;
 };
 
-export type CalculationState = PostDealState & { phase: 'calculation' };
+export type CalculationState = PostDealState & { phase: 'calculation'; readyPlayerIds: string[] };
 export type HighLowBetState  = PostDealState & { phase: 'high-low-bet' };
 
 /** Results phase embeds the round result — no separate store needed. */

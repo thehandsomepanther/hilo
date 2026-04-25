@@ -50,7 +50,8 @@ export type SerializedAction =
   | { name: 'doNextRound' }
   | { name: 'resolveDecision'; args: [MultiplicationDecision] }
   | { name: 'updateLobbyName'; args: [number, string] }
-  | { name: 'submitMyBetChoice'; args: [string, 'high' | 'low' | 'swing'] };
+  | { name: 'submitMyBetChoice'; args: [string, 'high' | 'low' | 'swing'] }
+  | { name: 'setPlayerReady';    args: [string] };
 
 /** Messages sent from a peer to the host. */
 export type PeerMsg = { type: 'action'; payload: SerializedAction };

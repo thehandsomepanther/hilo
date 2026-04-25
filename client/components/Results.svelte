@@ -44,6 +44,9 @@
             {lowWinner.name}
             — equation: <code>{'lowEquation' in lowWinner ? lowWinner.lowEquation : ''}</code>
             = {'lowResult' in lowWinner ? lowWinner.lowResult?.toFixed(4) : ''}
+            {#if result.kind === 'contested' && result.lowTiebreak}
+              <br /><em>{result.lowTiebreak}</em>
+            {/if}
           {:else}
             No winner (rolled over)
           {/if}
@@ -54,6 +57,9 @@
             {highWinner.name}
             — equation: <code>{'highEquation' in highWinner ? highWinner.highEquation : ''}</code>
             = {'highResult' in highWinner ? highWinner.highResult?.toFixed(4) : ''}
+            {#if result.kind === 'contested' && result.highTiebreak}
+              <br /><em>{result.highTiebreak}</em>
+            {/if}
           {:else}
             No winner (rolled over)
           {/if}

@@ -272,7 +272,7 @@ function phase2Step(
   }
 
   if (playerIdx >= players.length) {
-    return { status: 'complete', state: { ...baseState, phase: 'calculation', players, deck } };
+    return { status: 'complete', state: { ...baseState, phase: 'calculation', players, deck, readyPlayerIds: [] } };
   }
 
   const player = players[playerIdx]!;

@@ -157,7 +157,7 @@
           {#each $gameState.players as player}
             {@const isMe = player.id === $localPlayerId}
             {@const isActive = player.id === activePlayerId && (phase === 'betting-1' || phase === 'betting-2')}
-            {@const showSecret = !$localPlayerId || isMe}
+            {@const showSecret = !$localPlayerId || isMe || (phase === 'results' && !player.folded)}
             {@const showEquations = !$localPlayerId || isMe || phase === 'results'}
             {@const dealt = 'secretCard' in player && player.secretCard !== null ? player as DealtPlayer : null}
             <tr style={(isMe || isActive) ? 'background-color: #fffbcc; font-weight: bold;' : ''}>
