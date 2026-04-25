@@ -9,9 +9,11 @@ declare module 'p2pcf' {
     turnIceServers?: RTCIceServer[];
     networkChangePollIntervalMs?: number;
     stateExpirationIntervalMs?: number;
+    fastPollingDurationMs?: number;
     fastPollingRateMs?: number;
     slowPollingRateMs?: number;
     idlePollingAfterMs?: number;
+    idlePollingRateMs?: number;
   }
 
   export default class P2PCF {
@@ -20,8 +22,11 @@ declare module 'p2pcf' {
     destroy(): void;
     send(peer: P2PCFPeer, data: Uint8Array): void;
     broadcast(data: Uint8Array): void;
-    on(event: 'peerconnect', handler: (peer: P2PCFPeer) => void): this;
-    on(event: 'peerclose',   handler: (peer: P2PCFPeer) => void): this;
+    on(event: 'peerconnect'|'peerclose', handler: (peer: P2PCFPeer) => void): this;
     on(event: 'msg', handler: (peer: P2PCFPeer, data: ArrayBuffer) => void): this;
+    /** @internal — epoch ms before which _step skips fetching. Set to Infinity to pause polling. */
+    nextStepTime: number;
+    /** @internal — interval handle for NAT-type rechecks; null after clearing. */
+    networkSettingsInterval: ReturnType<typeof setInterval> | null;
   }
 }

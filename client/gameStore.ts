@@ -520,6 +520,7 @@ export function setupAsPeer(roomId: string, workerUrl?: string): void {
         myPlayerIndex.set(msg.payload.playerIndex);
         break;
       case 'proceedToSetup':
+        peerNet?.stopPolling();
         lobbyProceed.set(true);
         break;
     }
@@ -531,6 +532,7 @@ export function setupAsPeer(roomId: string, workerUrl?: string): void {
 /** Host calls this when clicking "Done" — signals all peers to advance past the lobby. */
 export function hostProceed(): void {
   hostNet?.broadcast({ type: 'proceedToSetup' });
+  hostNet?.stopPolling();
 }
 
 export function getConnectedPeerIds(): string[] {

@@ -89,7 +89,12 @@ export class HostNetwork {
   onMessage: ((peerId: string, msg: PeerMsg) => void) | null = null;
 
   constructor(roomId: string, workerUrl?: string) {
-    this.p2pcf = new P2PCF('host', roomId, { workerUrl: workerUrl });
+    this.p2pcf = new P2PCF('host', roomId, {
+      workerUrl,
+      fastPollingRateMs: 2000,
+      slowPollingRateMs: 8000,
+      networkChangePollIntervalMs: 30000,
+    });
 
     this.p2pcf.on('peerconnect', (peer) => {
       this.peers.set(peer.client_id, peer);
@@ -127,6 +132,14 @@ export class HostNetwork {
     return [...this.peers.keys()];
   }
 
+  stopPolling(): void {
+    if (this.p2pcf.networkSettingsInterval !== null) {
+      clearInterval(this.p2pcf.networkSettingsInterval);
+      this.p2pcf.networkSettingsInterval = null;
+    }
+    this.p2pcf.nextStepTime = Infinity;
+  }
+
   close(): void {
     this.p2pcf.destroy();
     this.peers.clear();
@@ -152,7 +165,12 @@ export class PeerNetwork {
       () => ROOM_CHARS[Math.floor(Math.random() * ROOM_CHARS.length)],
     ).join('');
 
-    this.p2pcf = new P2PCF(clientId, roomId, { workerUrl: workerUrl });
+    this.p2pcf = new P2PCF(clientId, roomId, {
+      workerUrl,
+      fastPollingRateMs: 2000,
+      slowPollingRateMs: 8000,
+      networkChangePollIntervalMs: 30000,
+    });
 
     this.p2pcf.on('peerconnect', (peer) => {
       if (peer.client_id === 'host') {
@@ -183,6 +201,14 @@ export class PeerNetwork {
 
   isConnected(): boolean {
     return this.hostPeer !== null;
+  }
+
+  stopPolling(): void {
+    if (this.p2pcf.networkSettingsInterval !== null) {
+      clearInterval(this.p2pcf.networkSettingsInterval);
+      this.p2pcf.networkSettingsInterval = null;
+    }
+    this.p2pcf.nextStepTime = Infinity;
   }
 
   close(): void {
