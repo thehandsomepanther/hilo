@@ -15,7 +15,7 @@
 
   function tokenLabel(card: Card, idx: number, all: Card[]): string {
     const base = card.kind === 'number'
-      ? `${card.value} (${card.suit})`
+      ? `${card.value}`
       : card.operator;
     const matches = (c: Card) =>
       c.kind === 'number'
@@ -80,9 +80,13 @@
     ps[target] = makeEquationState(n);
   }
 
-  /** True if tokenIdx is already selected in any slot of this equation other than currentSlotIdx. */
-  function isUsedElsewhere(eqSlots: Slots, tokenIdx: number, currentSlotIdx: number): boolean {
-    return eqSlots.some((s, i) => i !== currentSlotIdx && s === tokenIdx);
+  /** Remove the card at fromIdx and everything to its right. */
+  function popFrom(playerId: string, target: 'low' | 'high', fromIdx: number): void {
+    const eq = playerStates[playerId]?.[target];
+    if (!eq) return;
+    for (let i = fromIdx; i < eq.slots.length; i++) eq.slots[i] = null;
+    eq.error = null;
+    eq.submitted = false;
   }
 
   /** Build a preview string from the current slots. '?' fills empty positions. */
@@ -218,43 +222,52 @@
                 <output>✓ <code>{submittedEquation}</code> = {submittedResult?.toFixed(4)}</output>
                 <button type="button" onclick={() => unsubmitEquation(player.id, target)}>Edit</button>
               {:else}
-                {#each eqSlots as _, slotIdx}
-                  <select
-                    value={eqSlots[slotIdx] != null ? String(eqSlots[slotIdx]) : ''}
-                    onchange={(e) => {
-                      const raw = (e.target as HTMLSelectElement).value;
-                      setSlot(player.id, target, slotIdx, raw === '' ? null : Number(raw));
-                    }}
-                  >
-                    <option value="">—</option>
-                    {#each tokens as token, tokenIdx}
-                      <option
-                        value={String(tokenIdx)}
-                        disabled={
-                          isUsedElsewhere(eqSlots, tokenIdx, slotIdx) ||
-                          isDisabledByPosition(token, slotIdx, tokens.length)
-                        }
-                      >
-                        {tokenLabel(token, tokenIdx, tokens)}
-                      </option>
-                    {/each}
-                  </select>
-                {/each}
+                <!-- Both rows in one grid so each column is sized by its widest item -->
+                <div style="display:grid;grid-template-columns:repeat({tokens.length},3rem);justify-items:stretch;gap:6px;margin-bottom:8px;">
+                  <!-- Top row: slots -->
+                  {#each eqSlots as slotValue, slotIdx}
+                    {#if slotValue != null}
+                      <div
+                        role="button"
+                        tabindex="0"
+                        title="Click to remove this card and all to its right"
+                        style="height:2.5rem;padding:0 6px;border:2px solid #555;border-radius:4px;display:flex;align-items:center;justify-content:center;cursor:pointer;font-size:0.85rem;background:#fff;"
+                        onclick={() => popFrom(player.id, target, slotIdx)}
+                        onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') popFrom(player.id, target, slotIdx); }}
+                      >{tokenLabel(tokens[slotValue]!, slotValue, tokens)}</div>
+                    {:else}
+                      <div style="height:2.5rem;border:2px dashed #bbb;border-radius:4px;background:#fafafa;"></div>
+                    {/if}
+                  {/each}
 
-                <br />
-                <output>{buildPreview(eqSlots, tokens)}</output>
+                  <!-- Bottom row: available tokens; click to place in next empty slot -->
+                  {#each tokens as token, tokenIdx}
+                    {@const used = eqSlots.some(s => s === tokenIdx)}
+                    {@const nextSlot = eqSlots.indexOf(null)}
+                    {@const posDisabled = nextSlot === -1 || isDisabledByPosition(token, nextSlot, tokens.length)}
+                    {@const disabled = used || posDisabled}
+                    <div
+                      role="button"
+                      tabindex={disabled ? -1 : 0}
+                      style="height:2.5rem;padding:0 6px;border:2px solid {disabled ? '#ccc' : '#555'};border-radius:4px;display:flex;align-items:center;justify-content:center;font-size:0.85rem;background:{used ? '#f0f0f0' : '#fff'};opacity:{used ? 0.4 : 1};cursor:{disabled ? 'default' : 'pointer'};"
+                      onclick={() => { if (!disabled) setSlot(player.id, target, nextSlot, tokenIdx); }}
+                      onkeydown={(e) => { if ((e.key === 'Enter' || e.key === ' ') && !disabled) setSlot(player.id, target, nextSlot, tokenIdx); }}
+                    >{tokenLabel(token, tokenIdx, tokens)}</div>
+                  {/each}
+                </div>
 
-                <button
-                  type="button"
-                  disabled={!allFilled(eqSlots)}
-                  onclick={() => validate(player.id, target)}
-                >
-                  Submit
-                </button>
-                <button type="button" onclick={() => resetEquation(player.id, target)}>Reset</button>
+                <div style="margin-top:8px;display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+                  <output style="font-family:monospace;font-size:0.9rem;">{buildPreview(eqSlots, tokens)}</output>
+                  <button
+                    type="button"
+                    disabled={!allFilled(eqSlots)}
+                    onclick={() => validate(player.id, target)}
+                  >Submit</button>
+                  <button type="button" onclick={() => resetEquation(player.id, target)}>Reset</button>
+                </div>
 
                 {#if eq?.error}
-                  <output role="alert">Error: {eq.error}</output>
+                  <p role="alert" style="color:red;margin:4px 0 0;">{eq.error}</p>
                 {/if}
               {/if}
             </fieldset>
