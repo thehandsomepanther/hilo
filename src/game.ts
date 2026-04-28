@@ -90,9 +90,13 @@ export function startRound(state: SetupState): ForcedBetState {
 // ─── Forced Bet ───────────────────────────────────────────────────────────────
 
 export function collectForcedBets(state: ForcedBetState): Dealing1State {
+  const effectiveBet = Math.min(
+    state.forcedBetAmount,
+    ...state.players.map((p) => p.chips),
+  );
   let pot = state.pot;
   const players: UndealPlayer[] = state.players.map((p) => {
-    const bet = Math.min(p.chips, state.forcedBetAmount);
+    const bet = Math.min(p.chips, effectiveBet);
     pot += bet;
     return { ...p, chips: p.chips - bet, currentBet: bet };
   });

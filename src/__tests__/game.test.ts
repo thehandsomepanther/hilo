@@ -167,16 +167,18 @@ describe('collectForcedBets', () => {
     next.players.forEach((p) => expect(p.chips).toBe(9));
   });
 
-  it('goes all-in when chips < forced bet', () => {
-    const base = startRound(createGame(['Alice', 'Bob'], 1));
-    // Override forcedBetAmount to simulate a later round
-    const state: ForcedBetState = { ...base, forcedBetAmount: 5 };
+  it('caps bet at shortest stack so all players pay equally', () => {
+    const base = startRound(createGame(['Alice', 'Bob'], 10));
+    // Alice is short-stacked; forced bet is 5 but she only has 2 chips
+    const state: ForcedBetState = {
+      ...base,
+      forcedBetAmount: 5,
+      players: base.players.map((p, i) => ({ ...p, chips: i === 0 ? 2 : 10 })),
+    };
     const next = collectForcedBets(state);
-    next.players.forEach((p) => {
-      expect(p.chips).toBe(0);
-      expect(p.currentBet).toBe(1);
-    });
-    expect(next.pot).toBe(2);
+    // Both should bet 2 (Alice's stack), not 2 vs 5
+    next.players.forEach((p) => expect(p.currentBet).toBe(2));
+    expect(next.pot).toBe(base.pot + 4);
     expect(next.bettingLocked).toBe(true);
   });
 });
