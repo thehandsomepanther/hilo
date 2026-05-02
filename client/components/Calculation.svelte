@@ -209,7 +209,7 @@
       {@const ps = playerStates[player.id]}
 
       {#if isMe}
-        <fieldset>
+        <fieldset style="max-width: 100vw; box-sizing: border-box;">
           <legend>{player.name}</legend>
 
           {#snippet equationBuilder(target: 'low' | 'high', label: string, submittedEquation: string | null, submittedResult: number | null)}
@@ -223,7 +223,7 @@
                 <button type="button" onclick={() => unsubmitEquation(player.id, target)}>Edit</button>
               {:else}
                 <!-- Both rows in one grid so each column is sized by its widest item -->
-                <div style="display:grid;grid-template-columns:repeat({tokens.length},3rem);justify-items:stretch;gap:6px;margin-bottom:8px;">
+                <div style="display:grid;grid-template-columns:repeat({tokens.length},minmax(0,3rem));justify-items:stretch;gap:6px;margin-bottom:8px;">
                   <!-- Top row: slots -->
                   {#each eqSlots as slotValue, slotIdx}
                     {#if slotValue != null}

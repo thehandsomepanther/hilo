@@ -139,6 +139,7 @@
     <hr />
     <section>
       <h2>{$localPlayerId ? 'Your hand' : 'All players'}</h2>
+      <div style="overflow-x: auto;">
       <table>
         <thead>
           <tr>
@@ -199,6 +200,7 @@
           {/each}
         </tbody>
       </table>
+      </div>
     </section>
   {/if}
 
