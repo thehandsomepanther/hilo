@@ -37,9 +37,24 @@
   let roomInput = $state('');
   let peerJoined = $state(false);
   let peerError = $state('');
+  let connectTimeout: ReturnType<typeof setTimeout> | null = null;
 
   // The peer has been assigned a slot when myPlayerIndex is set.
   const peerAssigned = $derived($myPlayerIndex !== null && $myPlayerIndex > 0);
+
+  $effect(() => {
+    if (peerJoined && !peerAssigned) {
+      connectTimeout = setTimeout(() => {
+        if (!peerAssigned) {
+          peerJoined = false;
+          peerError = 'Could not connect after 30 seconds. Check the room code and try again. If both players are on different networks, a custom TURN server may be required.';
+        }
+      }, 30000);
+    } else if (peerAssigned && connectTimeout !== null) {
+      clearTimeout(connectTimeout);
+      connectTimeout = null;
+    }
+  });
 
   // Auto-advance when the host broadcasts proceedToSetup.
   $effect(() => { if ($lobbyProceed) oncomplete(); });
