@@ -7,8 +7,7 @@
   type Mode = 'choose' | 'host' | 'peer';
   let mode = $state<Mode>('choose');
 
-  const DEFAULT_WORKER_URL = 'https://hilo-worker.hilo.workers.dev';
-  let workerUrl = $state(localStorage.getItem('workerUrl') ?? DEFAULT_WORKER_URL);
+  let workerUrl = $state(localStorage.getItem('workerUrl') ?? '');
   $effect(() => { localStorage.setItem('workerUrl', workerUrl); });
 
   // ─── Host state ───────────────────────────────────────────────────────────────
