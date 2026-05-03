@@ -36,7 +36,7 @@ import type { RoundResult } from '../src/types';
 import { evaluateEquation } from '../src/equation';
 import { startDealPhase1, startDealPhase2 } from './dealing';
 import type { DealStep } from './dealing';
-import { HostNetwork, PeerNetwork, generateRoomId } from './network';
+import { HostNetwork, PeerNetwork, generateRoomId, fetchIceServers } from './network';
 import type { SerializedAction, LobbyState } from './network';
 export { generateRoomId } from './network';
 import { startBotRunner } from './bots/botRunner';
@@ -482,9 +482,10 @@ export function submitBotBetChoice(playerId: string, choice: 'high' | 'low' | 's
 
 // ─── Networking setup ─────────────────────────────────────────────────────────
 
-export function setupAsHost(roomId: string, workerUrl?: string): void {
+export async function setupAsHost(roomId: string, workerUrl?: string): Promise<void> {
   if (hostNet) return;
-  hostNet = new HostNetwork(roomId, workerUrl);
+  const iceServers = await fetchIceServers(workerUrl);
+  hostNet = new HostNetwork(roomId, workerUrl, iceServers);
   networkMode.set('host');
   myPlayerIndex.set(0);
   lobbyState.update((s) => ({ ...s, players: [{ name: '', isBot: false }] }));
@@ -507,8 +508,9 @@ export function setupAsHost(roomId: string, workerUrl?: string): void {
   hostNet.start();
 }
 
-export function setupAsPeer(roomId: string, workerUrl?: string): void {
-  peerNet = new PeerNetwork(roomId, workerUrl);
+export async function setupAsPeer(roomId: string, workerUrl?: string): Promise<void> {
+  const iceServers = await fetchIceServers(workerUrl);
+  peerNet = new PeerNetwork(roomId, workerUrl, iceServers);
   networkMode.set('peer');
 
   peerNet.onMessage = (msg) => {

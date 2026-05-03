@@ -1,0 +1,12 @@
+# State files — contain secrets, never commit
+*.tfstate
+*.tfstate.*
+*.tfstate.backup
+
+# Local variable overrides — contain secrets, never commit
+*.tfvars
+*.tfvars.json
+
+# Terraform working directory
+.terraform/
+.terraform.lock.hcl

@@ -15,19 +15,27 @@ import type { GameState, Player, MultiplicationDecision } from '../src/types';
 import type { BettingAction } from '../src/game';
 
 // ─── ICE servers ─────────────────────────────────────────────────────────────
-//
-// Always include TURN so it is available as a relay regardless of what
-// p2pcf's NAT-symmetry detection decides.  openrelay.metered.ca is the same
-// free relay that p2pcf uses by default, but here we include it even when
-// p2pcf would otherwise pick STUN-only.
 
-const ICE_SERVERS: RTCIceServer[] = [
+const STUN_ONLY: RTCIceServer[] = [
   { urls: 'stun:stun1.l.google.com:19302' },
   { urls: 'stun:global.stun.twilio.com:3478' },
-  { urls: 'turn:openrelay.metered.ca:80',              username: 'openrelayproject', credential: 'openrelayproject' },
-  { urls: 'turn:openrelay.metered.ca:443',             username: 'openrelayproject', credential: 'openrelayproject' },
-  { urls: 'turn:openrelay.metered.ca:443?transport=tcp', username: 'openrelayproject', credential: 'openrelayproject' },
 ];
+
+/**
+ * Fetch TURN credentials from the signalling worker's /turn-creds endpoint.
+ * Falls back to STUN-only if the worker URL is unknown or the request fails.
+ */
+export async function fetchIceServers(workerUrl?: string): Promise<RTCIceServer[]> {
+  if (!workerUrl) return STUN_ONLY;
+  try {
+    const res = await fetch(`${workerUrl}/turn-creds`);
+    if (!res.ok) return STUN_ONLY;
+    const turnServers = await res.json() as RTCIceServer[];
+    return turnServers.length > 0 ? [...STUN_ONLY, ...turnServers] : STUN_ONLY;
+  } catch {
+    return STUN_ONLY;
+  }
+}
 
 // ─── Lobby types ─────────────────────────────────────────────────────────────
 
@@ -66,7 +74,7 @@ export type SerializedAction =
   | { name: 'resolveDecision'; args: [MultiplicationDecision] }
   | { name: 'updateLobbyName'; args: [number, string] }
   | { name: 'submitMyBetChoice'; args: [string, 'high' | 'low' | 'swing'] }
-  | { name: 'setPlayerReady';    args: [string] };
+  | { name: 'setPlayerReady'; args: [string] };
 
 /** Messages sent from a peer to the host. */
 export type PeerMsg = { type: 'action'; payload: SerializedAction };
@@ -104,11 +112,11 @@ export class HostNetwork {
   onConnected: ((peerId: string) => void) | null = null;
   onMessage: ((peerId: string, msg: PeerMsg) => void) | null = null;
 
-  constructor(roomId: string, workerUrl?: string) {
+  constructor(roomId: string, workerUrl?: string, iceServers: RTCIceServer[] = STUN_ONLY) {
     this.p2pcf = new P2PCF('host', roomId, {
       workerUrl,
-      stunIceServers: ICE_SERVERS,
-      turnIceServers: ICE_SERVERS,
+      stunIceServers: iceServers,
+      turnIceServers: iceServers,
       fastPollingRateMs: 2000,
       slowPollingRateMs: 8000,
       networkChangePollIntervalMs: 30000,
@@ -177,7 +185,7 @@ export class PeerNetwork {
   onConnected: (() => void) | null = null;
   onMessage: ((msg: HostMsg) => void) | null = null;
 
-  constructor(roomId: string, workerUrl?: string) {
+  constructor(roomId: string, workerUrl?: string, iceServers: RTCIceServer[] = STUN_ONLY) {
     const clientId = Array.from(
       { length: 8 },
       () => ROOM_CHARS[Math.floor(Math.random() * ROOM_CHARS.length)],
@@ -185,8 +193,8 @@ export class PeerNetwork {
 
     this.p2pcf = new P2PCF(clientId, roomId, {
       workerUrl,
-      stunIceServers: ICE_SERVERS,
-      turnIceServers: ICE_SERVERS,
+      stunIceServers: iceServers,
+      turnIceServers: iceServers,
       fastPollingRateMs: 2000,
       slowPollingRateMs: 8000,
       networkChangePollIntervalMs: 30000,
