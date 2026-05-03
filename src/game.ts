@@ -109,9 +109,12 @@ export function collectForcedBets(state: ForcedBetState): Dealing1State {
 /** Deal the secret face-down number card to every non-folded player. */
 export function dealSecretCards(state: Dealing1State): Dealing1State {
   let deck = [...state.deck];
+  let zerosDrawn = 0;
   const players: Player[] = state.players.map((p) => {
     if (p.folded) return p;
-    const result = drawNumberCard(deck);
+    const exclude: ReadonlySet<number> = zerosDrawn >= 3 ? new Set([0]) : new Set();
+    const result = drawNumberCard(deck, exclude);
+    if (result.card.value === 0) zerosDrawn++;
     deck = result.remaining;
     // Transition UndealPlayer → partial DealtPlayer (faceUpCards still empty)
     const dealt: DealtPlayer = {

@@ -46,6 +46,15 @@ resource "cloudflare_workers_script" "hilo" {
     name = "ALLOWED_ORIGINS"
     text = var.allowed_origins
   }
+
+  provisioner "local-exec" {
+    command     = "npx wrangler deploy --keep-vars"
+    working_dir = "${path.module}/.."
+    environment = {
+      CLOUDFLARE_API_TOKEN  = var.cloudflare_api_token
+      CLOUDFLARE_ACCOUNT_ID = var.cloudflare_account_id
+    }
+  }
 }
 
 # ─── Pages project (static site) ─────────────────────────────────────────────

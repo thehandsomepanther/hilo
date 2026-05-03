@@ -1,0 +1,13 @@
+name = "sig-e15ad90bdf"
+main = "worker.js"
+compatibility_date = "2024-01-01"
+workers_dev = true
+account_id = "b378b0614dfac1f3d9c6c6589c221a5d"
+preview_urls = false
+
+[vars]
+ALLOWED_ORIGINS = "https://hilo.pages.dev,https://joshshi.com"
+
+[[r2_buckets]]
+binding = "BUCKET"
+bucket_name = "hilo-signaling"

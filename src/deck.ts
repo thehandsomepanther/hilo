@@ -50,19 +50,33 @@ export function drawCard(deck: Card[]): { card: Card; remaining: Card[] } {
 }
 
 /**
- * Draw cards until a NumberCard is found, returning it along with the
- * remaining deck (discarded non-number cards are gone).
+ * Draw cards until an eligible NumberCard is found, returning it along with
+ * the remaining deck (discarded operator cards are gone).
+ *
+ * Number cards whose value is in `excludeValues` are skipped and returned to
+ * the bottom of the remaining deck (shuffled in). Operator cards are discarded.
  */
-export function drawNumberCard(deck: Card[]): { card: NumberCard; remaining: Card[] } {
+export function drawNumberCard(
+  deck: Card[],
+  excludeValues: ReadonlySet<number> = new Set(),
+): { card: NumberCard; remaining: Card[] } {
   let remaining = [...deck];
+  const putBack: NumberCard[] = [];
   while (remaining.length > 0) {
     const result = drawCard(remaining);
     remaining = result.remaining;
     if (result.card.kind === 'number') {
-      return { card: result.card as NumberCard, remaining };
+      if (!excludeValues.has(result.card.value)) {
+        const finalRemaining = putBack.length > 0
+          ? shuffle([...remaining, ...putBack])
+          : remaining;
+        return { card: result.card as NumberCard, remaining: finalRemaining };
+      }
+      putBack.push(result.card as NumberCard);
+    } else {
+      // operator card: discard and reshuffle to avoid positional bias
+      remaining = shuffle(remaining);
     }
-    // non-number card: discard and reshuffle to avoid positional bias
-    remaining = shuffle(remaining);
   }
-  throw new Error('No number cards left in deck');
+  throw new Error('No eligible number cards left in deck');
 }
