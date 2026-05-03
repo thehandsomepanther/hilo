@@ -41,6 +41,11 @@ resource "cloudflare_workers_script" "hilo" {
     name = "METERED_CREDENTIAL"
     text = var.metered_credential
   }
+
+  plain_text_binding {
+    name = "ALLOWED_ORIGINS"
+    text = var.allowed_origins
+  }
 }
 
 # ─── Pages project (static site) ─────────────────────────────────────────────
@@ -51,7 +56,18 @@ resource "cloudflare_pages_project" "hilo" {
   production_branch = "main"
 
   build_config {
-    build_command   = "pnpm install && pnpm build"
-    destination_dir = "docs"
+    build_command      = "pnpm install && pnpm build"
+    destination_dir    = "docs"
+    root_dir           = ""
+    build_caching      = true
+  }
+
+  deployment_configs {
+    production {
+      usage_model = "standard"
+      environment_variables = {
+        VITE_BASE_PATH = "/"
+      }
+    }
   }
 }

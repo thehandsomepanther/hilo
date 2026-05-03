@@ -24,7 +24,13 @@ variable "metered_credential" {
 variable "worker_name" {
   description = "Name for the Cloudflare Worker"
   type        = string
-  default     = "hilo-worker"
+  default     = "sig-e15ad90bdf"
+}
+
+variable "allowed_origins" {
+  description = "Comma-separated list of origins permitted to use the worker (e.g. https://hilo.pages.dev)"
+  type        = string
+  default     = ""
 }
 
 variable "pages_project_name" {
