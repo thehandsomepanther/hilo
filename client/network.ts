@@ -27,6 +27,7 @@ const STUN_ONLY: RTCIceServer[] = [
  */
 export async function fetchIceServers(workerUrl?: string): Promise<RTCIceServer[]> {
   if (!workerUrl) return STUN_ONLY;
+  try { new URL(workerUrl); } catch { return STUN_ONLY; }
   try {
     const res = await fetch(`${workerUrl}/turn-creds`);
     if (!res.ok) return STUN_ONLY;
