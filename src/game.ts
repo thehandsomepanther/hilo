@@ -84,6 +84,7 @@ export function startRound(state: SetupState): ForcedBetState {
     dealerIndex: advanceDealerIndex(state.players, state.dealerIndex),
     forcedBetAmount: newRound,
     bettingLocked: false,
+    players: state.players.map((p) => ({ ...p, folded: p.chips === 0 })),
   };
 }
 
@@ -92,15 +93,16 @@ export function startRound(state: SetupState): ForcedBetState {
 export function collectForcedBets(state: ForcedBetState): Dealing1State {
   const effectiveBet = Math.min(
     state.forcedBetAmount,
-    ...state.players.map((p) => p.chips),
+    ...state.players.filter((p) => !p.folded).map((p) => p.chips),
   );
   let pot = state.pot;
   const players: UndealPlayer[] = state.players.map((p) => {
+    if (p.folded) return p;
     const bet = Math.min(p.chips, effectiveBet);
     pot += bet;
     return { ...p, chips: p.chips - bet, currentBet: bet };
   });
-  const bettingLocked = players.some((p) => p.currentBet < state.forcedBetAmount);
+  const bettingLocked = players.some((p) => !p.folded && p.currentBet < state.forcedBetAmount);
   return { ...state, phase: 'dealing-1', players, pot, bettingLocked };
 }
 
