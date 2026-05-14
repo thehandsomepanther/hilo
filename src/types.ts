@@ -125,6 +125,8 @@ type BaseState = {
    * are banned from betting on that pot.  Players with no equations are folded.
    */
   enforceTimeLimit: boolean;
+  /** Chip counts per player after each round's payouts. Index 0 = starting state. */
+  chipHistory: Array<Record<string, number>>;
 };
 
 // Phases share player-array types according to what has been dealt:

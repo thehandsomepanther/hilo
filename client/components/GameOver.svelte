@@ -1,5 +1,6 @@
 <script lang="ts">
   import { gameState, doPlayAgain } from '../gameStore';
+  import ChipChart from './ChipChart.svelte';
 
   const winnerId = $derived($gameState?.phase === 'game-over' ? $gameState.winnerId : null);
 
@@ -44,6 +45,14 @@
   </table>
 
   <p>Rounds played: <strong>{$gameState?.round}</strong></p>
+
+  {#if ($gameState?.chipHistory?.length ?? 0) > 1}
+    <h3>Chip history</h3>
+    <ChipChart
+      chipHistory={$gameState?.chipHistory ?? []}
+      players={$gameState?.players ?? []}
+    />
+  {/if}
 
   <button type="button" onclick={doPlayAgain}>Play again</button>
 </section>

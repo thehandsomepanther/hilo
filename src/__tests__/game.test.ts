@@ -86,6 +86,7 @@ function makeBettingState(players: DealtPlayer[], phase: 'betting-1' | 'betting-
     dealerIndex: 0,
     bettingLocked: false,
     enforceTimeLimit: false,
+    chipHistory: [],
     activePlayerIndex: 0,
     currentBet: 0,
     bettingActionsThisRound: 0,
@@ -105,6 +106,7 @@ function makeHighLowState(players: DealtPlayer[]): HighLowBetState {
     dealerIndex: 0,
     bettingLocked: false,
     enforceTimeLimit: false,
+    chipHistory: [],
   };
 }
 
@@ -487,6 +489,7 @@ describe('advanceFromResults', () => {
       dealerIndex: 0,
       bettingLocked: false,
       enforceTimeLimit: false,
+      chipHistory: [],
       result: { kind: 'contested', lowWinnerId: 'a', highWinnerId: 'b', payouts: { a: 10, b: 10 } },
     };
     const next = advanceFromResults(state);
@@ -508,6 +511,7 @@ describe('advanceFromResults', () => {
       dealerIndex: 0,
       bettingLocked: false,
       enforceTimeLimit: false,
+      chipHistory: [],
       result: { kind: 'contested', lowWinnerId: 'b', highWinnerId: 'b', payouts: { b: 20 } },
     };
     const next = advanceFromResults(state);
@@ -586,6 +590,7 @@ describe('pot rollover end-to-end', () => {
       dealerIndex: 0,
       bettingLocked: false,
       enforceTimeLimit: false,
+      chipHistory: [],
       result: { kind: 'contested', lowWinnerId: null, highWinnerId: 'b', payouts: { b: 10, __rollover__: 5 } },
     };
     const afterPayout = applyPayouts(resultsState);

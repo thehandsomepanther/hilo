@@ -186,7 +186,13 @@ export function applyPayouts(state: ResultsState): SetupState {
     faceUpCards: [],
   }));
 
-  // Strip phase-specific fields from state spread, then set 'setup' phase.
+  const snapshot = Object.fromEntries(players.map((p) => [p.id, p.chips]));
   const { phase: _phase, result: _result, ...base } = state;
-  return { ...base, phase: 'setup', players, pot: rollover };
+  return {
+    ...base,
+    phase: 'setup',
+    players,
+    pot: rollover,
+    chipHistory: [...state.chipHistory, snapshot],
+  };
 }

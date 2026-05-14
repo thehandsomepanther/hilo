@@ -37,6 +37,7 @@ function baseState(players: DealtPlayer[], pot = 20): ResultsState {
     dealerIndex: 0,
     bettingLocked: false,
     enforceTimeLimit: false,
+    chipHistory: [],
     result: { kind: 'contested', lowWinnerId: null, highWinnerId: null, payouts: {} },
   };
 }

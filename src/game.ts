@@ -41,6 +41,7 @@ export function createGame(
     dealerIndex: players.length - 1,
     bettingLocked: false,
     enforceTimeLimit,
+    chipHistory: [Object.fromEntries(players.map((p) => [p.id, p.chips]))],
   };
 }
 
