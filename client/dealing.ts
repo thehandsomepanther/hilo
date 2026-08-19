@@ -47,7 +47,8 @@ type CardAccumulator = {
  * was placed (√ or accepted ×).
  *
  * When a × card is drawn, returns a suspension instead so the caller can
- * ask the player for their decision.
+ * ask the player for their decision — unless the player already holds a ×,
+ * in which case the card is skipped and the next one dealt in its place.
  */
 type DrawOneResult =
   | { kind: 'done'; acc: CardAccumulator; deck: Card[]; wasSymbol: boolean }
@@ -83,6 +84,15 @@ function drawOneFaceUp(
   }
 
   if (card.operator === '×') {
+    // A second × is not a real choice: the player would have to surrender their
+    // remaining +/- to hold two multipliers, and once both are spent the only
+    // legal answer is "decline".  Skip the card and deal the next one instead,
+    // rather than making them dismiss a prompt that decides nothing.
+    const alreadyHasMultiplier = acc.faceUpCards.some(
+      (c) => c.kind === 'operator' && c.operator === '×',
+    );
+    if (alreadyHasMultiplier) return drawOneFaceUp(basePlayer, acc, remaining);
+
     const snap = { ...basePlayer, faceUpCards: acc.faceUpCards, personalOperators: acc.personalOperators } as Player;
     return {
       kind: 'needs-decision',

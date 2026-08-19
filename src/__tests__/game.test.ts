@@ -17,7 +17,7 @@ import { applyPayouts } from '../results';
 import {
   MultiplicationDecision, DealtPlayer, UndealPlayer, OperatorCard, Player,
   ForcedBetState, Dealing1State, Dealing2State, BettingState,
-  HighLowBetState, CalculationState, ResultsState, SetupState, Card,
+  HighLowBetState, CalculationState, ResultsState, SetupState, Card, NumberCard,
 } from '../types';
 import { startDealPhase1, startDealPhase2, DealStep } from '../../client/dealing';
 
@@ -281,6 +281,78 @@ describe('dealing — × card handling', () => {
     expect(alice.faceUpCards.some((c) => c.kind === 'operator' && c.operator === '×')).toBe(false);
     expect(alice.personalOperators).toHaveLength(3);
     expect(alice.faceUpCards.filter((c) => c.kind === 'number').length).toBeGreaterThanOrEqual(1);
+  });
+
+  // ── never a second × ──────────────────────────────────────────────────────
+  //
+  // A player who already accepted a × has nothing to decide about a second one:
+  // holding two multipliers costs both their + and −, and once those are gone
+  // "decline" is the only legal answer.  The card is skipped instead.
+
+  const MULT: Card = { kind: 'operator', operator: '×' };
+  const num = (value: NumberCard['value']): Card => ({ kind: 'number', value, suit: 'Gold' });
+
+  /** A dealing-2 state where the next card off the deck is a ×. */
+  function dealing2WithMultiplicationNext(aliceFaceUp: Card[], deck: Card[]): Dealing2State {
+    const alice = makeDealtPlayer({
+      id: 'Alice',
+      faceUpCards: aliceFaceUp,
+      personalOperators: [{ kind: 'operator', operator: '-' }, { kind: 'operator', operator: '÷' }],
+    });
+    return { ...makeBettingState([alice]), phase: 'dealing-2', deck } as Dealing2State;
+  }
+
+  it('skips a × for a player who already holds one, dealing the next card instead', () => {
+    const step = startDealPhase2(
+      dealing2WithMultiplicationNext([MULT, num(3)], [MULT, num(7), num(8)]),
+    );
+
+    // No prompt at all — the player is never asked.
+    expect(step.status).toBe('complete');
+    if (step.status !== 'complete') return;
+
+    const alice = step.state.players[0]!;
+    expect(alice.faceUpCards.filter((c) => c.kind === 'operator' && c.operator === '×')).toHaveLength(1);
+    // They received the card behind the skipped ×, not a short hand.
+    expect(alice.faceUpCards).toEqual([MULT, num(3), num(7)]);
+  });
+
+  it('skips a run of × cards for a player who already holds one', () => {
+    const step = startDealPhase2(
+      dealing2WithMultiplicationNext([MULT, num(3)], [MULT, MULT, MULT, num(9)]),
+    );
+
+    expect(step.status).toBe('complete');
+    if (step.status !== 'complete') return;
+    expect(step.state.players[0]!.faceUpCards).toEqual([MULT, num(3), num(9)]);
+  });
+
+  it('still offers a × to a player who declined an earlier one', () => {
+    // Declining leaves them holding no ×, so the next one is a genuine choice.
+    const step = startDealPhase2(
+      dealing2WithMultiplicationNext([num(3), num(4)], [MULT, num(7)]),
+    );
+    expect(step.status).toBe('awaiting-decision');
+  });
+
+  it('never deals two × cards across a whole random game', () => {
+    for (let i = 0; i < 200; i++) {
+      const base = collectForcedBets(startRound(createGame(['Alice', 'Bob', 'Charlie'], 50)));
+      // Accept every × offered — the only way to end up holding one.
+      const accept = (p: Player): MultiplicationDecision => {
+        const discard = p.personalOperators.find((op) => op.operator === '+' || op.operator === '-');
+        return discard ? { accept: true, discard: discard.operator as '+' | '-' } : { accept: false };
+      };
+      const afterPhase1 = driveDealing(startDealPhase1(base), accept);
+      const final = driveDealing(
+        startDealPhase2({ ...afterPhase1, phase: 'dealing-2' } as Dealing2State),
+        accept,
+      );
+      for (const p of final.players) {
+        const multipliers = p.faceUpCards.filter((c) => c.kind === 'operator' && c.operator === '×');
+        expect(multipliers.length).toBeLessThanOrEqual(1);
+      }
+    }
   });
 });
 
