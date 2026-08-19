@@ -10,7 +10,15 @@
 
 import type P2PCFType from 'p2pcf';
 import type { P2PCFPeer } from 'p2pcf';
-import type { Transport } from './transport';
+import type { Transport, PollingMode } from './transport';
+
+/**
+ * Signalling rate once a game is underway and everyone is connected.  Slow
+ * enough that the Cloudflare Worker sees almost no traffic, but the room stays
+ * discoverable so a peer that drops can rejoin.  When anyone *is* missing,
+ * gameStore switches back to 'active'.
+ */
+const IDLE_POLLING_RATE_MS = 45000;
 
 // ─── ICE servers ─────────────────────────────────────────────────────────────
 
@@ -75,12 +83,25 @@ class P2pcfTransport implements Transport {
     this.p2pcf.broadcast(data);
   }
 
-  stopPolling(): void {
-    if (this.p2pcf.networkSettingsInterval !== null) {
-      clearInterval(this.p2pcf.networkSettingsInterval);
-      this.p2pcf.networkSettingsInterval = null;
+  /**
+   * p2pcf re-reads these fields off the instance on every step, so flipping
+   * them at runtime moves the room between polling tiers.  Both the step loop
+   * and the network-change watcher keep running either way — they are what
+   * recovers a dropped connection, and p2pcf grants itself 10s of fast polling
+   * automatically whenever the peer set changes.
+   */
+  setPollingMode(mode: PollingMode): void {
+    const now = Date.now();
+    if (mode === 'idle') {
+      this.p2pcf.idlePollingAfterMs = 0;
+      this.p2pcf.idlePollingRateMs = IDLE_POLLING_RATE_MS;
+      this.p2pcf.startIdlePollingAt = now;
+    } else {
+      this.p2pcf.idlePollingAfterMs = Infinity;
+      this.p2pcf.startIdlePollingAt = Infinity;
+      // Cut short any idle-length wait already scheduled.
+      this.p2pcf.nextStepTime = Math.min(this.p2pcf.nextStepTime, now);
     }
-    this.p2pcf.nextStepTime = Infinity;
   }
 
   close(): void {

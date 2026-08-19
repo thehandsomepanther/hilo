@@ -19,7 +19,7 @@
  *              action taken during a connection blip is never lost.
  */
 
-import { writable, get } from 'svelte/store';
+import { writable, derived, get } from 'svelte/store';
 import type {
   GameState, Player, DealtPlayer, MultiplicationDecision,
   Dealing1State, Dealing2State, BettingState, HighLowBetState,
@@ -39,9 +39,10 @@ import { evaluateEquation } from '../src/equation';
 import { startDealPhase1, startDealPhase2 } from './dealing';
 import type { DealStep } from './dealing';
 import { HostNetwork, PeerNetwork, generateClientId, HOST_CLIENT_ID } from './network';
-import type { SerializedAction, LobbyState } from './network';
+import type { SerializedAction, LobbyState, JoinRejection } from './network';
 import type { Transport } from './transport';
 import { VersionCounter, VersionGate, HEARTBEAT_INTERVAL_MS } from './protocol';
+import { seatToken, seatName, rememberSeatName } from './identity';
 export { generateRoomId } from './network';
 import { startBotRunner } from './bots/botRunner';
 
@@ -80,14 +81,67 @@ export const lobbyState = writable<LobbyState>({
 
 export const myPlayerIndex = writable<number | null>(null);
 
+// ─── Connection status ────────────────────────────────────────────────────────
+
+/**
+ * Seats with a live connection to the host, maintained by the host and
+ * broadcast so every client shows the same picture.  The host's own seat is
+ * included; bot seats are not (they have no connection) — use `seatOnline`,
+ * which folds them in.
+ */
+export const connectedSeats = writable<number[]>([]);
+
+/** Peer side: is the host reachable?  Driven by `peerclose` and the heartbeat. */
+export const hostLinkUp = writable(true);
+
+/** Peer side: actions sent but not yet acked — nonzero means "not through yet". */
+export const queuedActionCount = writable(0);
+
+/** Set when the host refuses this client a seat. */
+export const joinRejected = writable<JoinRejection | null>(null);
+
+/**
+ * Per-seat "is this player present" flags, aligned with `lobbyState.players`.
+ * Bots run on the host tab and are always present; standalone has no network
+ * to lose.
+ */
+export const seatOnline = derived(
+  [connectedSeats, lobbyState, networkMode],
+  ([seats, lobby, mode]) =>
+    lobby.players.map((p, i) => mode === 'standalone' || p.isBot || seats.includes(i)),
+);
+
+/**
+ * A peer treats silence as a disconnect after this long.  The host heartbeats
+ * every HEARTBEAT_INTERVAL_MS, so three missed beats is a real outage rather
+ * than a slow tick — and `peerclose` usually reports it sooner.
+ */
+export const HOST_SILENCE_TIMEOUT_MS = HEARTBEAT_INTERVAL_MS * 3;
+
 // ─── Network objects ──────────────────────────────────────────────────────────
 
 let hostNet: HostNetwork | null = null;
 let peerNet: PeerNetwork | null = null;
 let stopBots: (() => void) | null = null;
 
-/** Maps WebRTC peer ID → player index (e.g. 'peer-1' → 1). */
-const peerPlayerIndex = new Map<string, number>();
+/**
+ * Host-side seat bookkeeping.
+ *
+ * `seatTokens` is the durable one: a peer's identity token → the seat it owns,
+ * which is what lets a reloaded player reclaim their chips and cards. The other
+ * two are keyed by transport connection id, which changes on every page load,
+ * and are re-pointed at the new connection when a known token says hello.
+ */
+const peerPlayerIndex = new Map<string, number>();   // connection → seat
+const peerTokens = new Map<string, string>();        // connection → token
+const seatTokens = new Map<string, number>();        // token → seat
+
+/**
+ * True once the lobby is closed.  Before that, signalling stays 'active' for
+ * discovery; after it, the host idles down to a cheap keepalive whenever
+ * everyone is present.
+ */
+let pastLobby = false;
 
 /**
  * Host side: per-message-type version counter (see protocol.ts).  New
@@ -102,6 +156,40 @@ let hostMsgGate = new VersionGate();
 
 /** Host side: rebroadcasts current snapshots every HEARTBEAT_INTERVAL_MS. */
 let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
+
+/** Peer side: watches for host silence.  See `hostSilenceWatchdog`. */
+const HOST_WATCHDOG_TICK_MS = 1000;
+let watchdogTimer: ReturnType<typeof setInterval> | null = null;
+let lastHostMsgAt = 0;
+
+/** The room this peer joined — the key its seat identity is stored under. */
+let peerRoomId: string | null = null;
+
+function noteHostAlive(): void {
+  lastHostMsgAt = Date.now();
+  // Only write on an actual transition — this runs on every heartbeat.
+  if (!get(hostLinkUp)) {
+    hostLinkUp.set(true);
+    updatePeerPolling();
+  }
+}
+
+/**
+ * `peerclose` is the authoritative disconnect signal but can lag a real outage
+ * by tens of seconds (ICE has to time out first), and a half-open channel may
+ * never fire it at all.  The heartbeat is the faster, surer tell: if the host
+ * has gone quiet for three beats, treat the link as down.
+ *
+ * Only meaningful once a game is running — the host deliberately doesn't
+ * heartbeat in the lobby, so silence there isn't evidence of anything.
+ */
+function hostSilenceWatchdog(): void {
+  if (!peerNet || !get(gameState)) return;
+  if (Date.now() - lastHostMsgAt > HOST_SILENCE_TIMEOUT_MS) {
+    hostLinkUp.set(false);
+    updatePeerPolling();
+  }
+}
 
 /**
  * Peer side: forward an action to the host.  PeerNetwork queues it and retries
@@ -158,6 +246,9 @@ pendingDecision.subscribe((pd) => {
 lobbyState.subscribe((ls) => {
   if (hostNet) hostNet.broadcast({ type: 'lobby', v: msgVersions.next('lobby'), payload: ls });
 });
+connectedSeats.subscribe((seats) => {
+  if (hostNet) hostNet.broadcast({ type: 'connections', v: msgVersions.next('connections'), payload: seats });
+});
 
 /**
  * Heartbeat: while a game is active, rebroadcast the current snapshots at
@@ -172,6 +263,111 @@ function heartbeat(): void {
   broadcastState(s, msgVersions.current('state'));
   broadcastPendingDecision(get(pendingDecision), msgVersions.current('pendingDecision'));
   hostNet.broadcast({ type: 'lobby', v: msgVersions.current('lobby'), payload: get(lobbyState) });
+  hostNet.broadcast({
+    type: 'connections',
+    v: msgVersions.current('connections'),
+    payload: get(connectedSeats),
+  });
+}
+
+// ─── Host-side connection tracking ───────────────────────────────────────────
+
+function setSeatConnected(seat: number, connected: boolean): void {
+  const seats = get(connectedSeats);
+  if (seats.includes(seat) === connected) return; // no change, no rebroadcast
+  connectedSeats.set(
+    connected ? [...seats, seat].sort((a, b) => a - b) : seats.filter((s) => s !== seat),
+  );
+}
+
+/**
+ * Signalling costs Worker traffic, so idle down to a keepalive once the lobby
+ * is closed AND every seated player is present.  Any absence flips discovery
+ * back on: polling is the only thing that can re-establish the connection.
+ */
+function updateHostPolling(): void {
+  if (!hostNet) return;
+  const seats = get(connectedSeats);
+  const everyoneHere = [...seatTokens.values()].every((seat) => seats.includes(seat));
+  hostNet.setPollingMode(pastLobby && everyoneHere ? 'idle' : 'active');
+}
+
+function updatePeerPolling(): void {
+  if (!peerNet) return;
+  // `hostLinkUp` also covers the half-open case the transport hasn't noticed.
+  const linkUp = peerNet.isConnected() && get(hostLinkUp);
+  peerNet.setPollingMode(pastLobby && linkUp ? 'idle' : 'active');
+}
+
+/**
+ * Bring one peer up to date: its seat number, then every current snapshot at
+ * its CURRENT version.  Used both for a first join and for every reconnect —
+ * a peer that missed changes while away applies them; one that didn't drops
+ * them by version.
+ */
+function sendSnapshotsTo(peerId: string, seat: number): void {
+  if (!hostNet) return;
+  hostNet.send(peerId, { type: 'slotAssignment', payload: { playerIndex: seat } });
+  hostNet.send(peerId, { type: 'lobby', v: msgVersions.current('lobby'), payload: get(lobbyState) });
+  hostNet.send(peerId, {
+    type: 'connections',
+    v: msgVersions.current('connections'),
+    payload: get(connectedSeats),
+  });
+  const s = get(gameState);
+  if (s) {
+    hostNet.send(peerId, {
+      type: 'state',
+      v: msgVersions.current('state'),
+      payload: sanitizeStateForPeer(s, seat),
+    });
+  }
+  const pd = get(pendingDecision);
+  if (pd) {
+    hostNet.send(peerId, {
+      type: 'pendingDecision',
+      v: msgVersions.current('pendingDecision'),
+      payload: { player: pd.player },
+    });
+  }
+  if (pastLobby) hostNet.send(peerId, { type: 'proceedToSetup' });
+}
+
+/**
+ * A peer has claimed an identity.  Either it's a token we know — in which case
+ * it keeps its seat and we just re-point the connection at it — or it's a new
+ * player, who gets a fresh lobby slot.  New players are turned away once a game
+ * is underway: appending a slot mid-game would corrupt the lobby, and the
+ * engine has no notion of a player joining a round in progress.
+ */
+function handleHello(peerId: string, token: string, name: string): void {
+  if (!hostNet) return;
+  let seat = seatTokens.get(token);
+
+  if (seat === undefined) {
+    if (get(gameState) !== null) {
+      hostNet.send(peerId, { type: 'rejected', reason: 'game-in-progress' });
+      return;
+    }
+    lobbyState.update((ls) => ({ ...ls, players: [...ls.players, { name, isBot: false }] }));
+    seat = get(lobbyState).players.length - 1;
+    seatTokens.set(token, seat);
+  } else {
+    // Returning player: forget the connection this token used to arrive on, so
+    // a stale entry can't keep receiving their sanitized state.
+    for (const [oldPeerId, t] of [...peerTokens]) {
+      if (t === token && oldPeerId !== peerId) {
+        peerTokens.delete(oldPeerId);
+        peerPlayerIndex.delete(oldPeerId);
+      }
+    }
+  }
+
+  peerPlayerIndex.set(peerId, seat);
+  peerTokens.set(peerId, token);
+  setSeatConnected(seat, true);
+  sendSnapshotsTo(peerId, seat);
+  updateHostPolling();
 }
 
 // ─── Log helper ───────────────────────────────────────────────────────────────
@@ -212,6 +408,38 @@ export function addPlayer(): void {
 
 export function removePlayer(index: number): void {
   lobbyState.update((s) => ({ ...s, players: s.players.filter((_, i) => i !== index) }));
+  reseatAfterRemoval(index);
+}
+
+/**
+ * Removing a lobby slot renumbers every seat below it, so the host's seat maps
+ * and each affected peer's `myPlayerIndex` have to shift with it.  In practice
+ * this fires when the host drops a bot from a lobby that peers have already
+ * joined; without it those peers would keep pointing at their old index and
+ * start the game as the wrong player.
+ */
+function reseatAfterRemoval(removed: number): void {
+  if (!hostNet) return;
+  const shift = (seat: number) => (seat > removed ? seat - 1 : seat);
+
+  for (const [token, seat] of [...seatTokens]) {
+    if (seat === removed) seatTokens.delete(token);
+    else seatTokens.set(token, shift(seat));
+  }
+  for (const [peerId, seat] of [...peerPlayerIndex]) {
+    if (seat === removed) {
+      peerPlayerIndex.delete(peerId);
+      peerTokens.delete(peerId);
+      continue;
+    }
+    if (seat > removed) {
+      peerPlayerIndex.set(peerId, seat - 1);
+      hostNet.send(peerId, { type: 'slotAssignment', payload: { playerIndex: seat - 1 } });
+    }
+  }
+  connectedSeats.set(
+    get(connectedSeats).filter((s) => s !== removed).map(shift),
+  );
 }
 
 export function updateStartingChips(chips: number): void {
@@ -232,6 +460,10 @@ export function addBot(): void {
 
 export function updateLobbyName(index: number, name: string): void {
   if (get(networkMode) === 'peer') {
+    // Remember our own name so a reload can propose it again in `hello`.
+    if (peerRoomId !== null && index === get(myPlayerIndex)) {
+      rememberSeatName(peerRoomId, name);
+    }
     sendToHost({ name: 'updateLobbyName', args: [index, name] });
     return;
   }
@@ -518,7 +750,9 @@ export function doNextRound(): void {
 export function doPlayAgain(): void {
   stopBots?.();
   stopBots = null;
-  peerPlayerIndex.clear();
+  // Seats and connections survive: the same players are going back to the same
+  // lobby.  Clearing the peer maps here would orphan every live connection —
+  // peers only say `hello` once per page load, so nothing would re-seat them.
   gameState.set(null);
 }
 
@@ -548,34 +782,30 @@ export async function setupAsHost(roomId: string, workerUrl?: string, transport?
   myPlayerIndex.set(0);
   lobbyState.update((s) => ({ ...s, players: [{ name: '', isBot: false }] }));
 
-  hostNet.onMessage = (_pid, msg) => { applyPeerAction(msg.payload); };
+  connectedSeats.set([0]); // the host is trivially present at its own seat
 
+  hostNet.onMessage = (pid, msg) => {
+    if (msg.type === 'hello') { handleHello(pid, msg.token, msg.name); return; }
+    applyPeerAction(msg.payload);
+  };
+
+  // A connection alone earns nothing: seats are handed out by `hello`, which
+  // carries the identity needed to tell a new player from a returning one.
+  // The exception is a connection we already know — a link that blipped and
+  // came back on the same transport id, whose peer won't re-say hello because
+  // its first one was already acked.
   hostNet.onConnected = (pid) => {
-    lobbyState.update((ls) => ({ ...ls, players: [...ls.players, { name: '', isBot: false }] }));
-    const currentLobby = get(lobbyState);
-    const peerIndex = currentLobby.players.length - 1;
-    peerPlayerIndex.set(pid, peerIndex);
-    hostNet!.send(pid, { type: 'slotAssignment', payload: { playerIndex: peerIndex } });
-    // Resend current snapshots at their current versions — the peer's gate
-    // starts at 0, so it applies them; peers that already have them (via the
-    // lobbyState.update broadcast above) drop the duplicates.
-    hostNet!.send(pid, { type: 'lobby', v: msgVersions.current('lobby'), payload: currentLobby });
-    const s = get(gameState);
-    const pd = get(pendingDecision);
-    if (s) {
-      hostNet!.send(pid, {
-        type: 'state',
-        v: msgVersions.current('state'),
-        payload: sanitizeStateForPeer(s, peerIndex),
-      });
-    }
-    if (pd) {
-      hostNet!.send(pid, {
-        type: 'pendingDecision',
-        v: msgVersions.current('pendingDecision'),
-        payload: { player: pd.player },
-      });
-    }
+    const seat = peerPlayerIndex.get(pid);
+    if (seat === undefined) return;
+    setSeatConnected(seat, true);
+    sendSnapshotsTo(pid, seat);
+    updateHostPolling();
+  };
+
+  hostNet.onDisconnected = (pid) => {
+    const seat = peerPlayerIndex.get(pid);
+    if (seat !== undefined) setSeatConnected(seat, false);
+    updateHostPolling();
   };
 
   hostNet.start();
@@ -590,8 +820,16 @@ export async function setupAsPeer(roomId: string, workerUrl?: string, transport?
   }
   peerNet = new PeerNetwork(transport);
   networkMode.set('peer');
+  peerRoomId = roomId;
+
+  peerNet.onConnected = () => { noteHostAlive(); updatePeerPolling(); };
+  peerNet.onDisconnected = () => { hostLinkUp.set(false); updatePeerPolling(); };
+  peerNet.onPendingChange = (n) => queuedActionCount.set(n);
 
   peerNet.onMessage = (msg) => {
+    // Any traffic at all proves the host is alive, even a snapshot we go on to
+    // discard as stale.
+    noteHostAlive();
     // Drop stale/duplicate versions — the host rebroadcasts snapshots
     // (heartbeat, reconnect) and only the newest of each type may apply.
     if (!hostMsgGate.accept(msg)) return;
@@ -618,23 +856,35 @@ export async function setupAsPeer(roomId: string, workerUrl?: string, transport?
       case 'lobby':
         lobbyState.set(msg.payload);
         break;
+      case 'connections':
+        connectedSeats.set(msg.payload);
+        break;
       case 'slotAssignment':
         myPlayerIndex.set(msg.payload.playerIndex);
         break;
       case 'proceedToSetup':
-        peerNet?.stopPolling();
+        pastLobby = true;
+        updatePeerPolling();
         lobbyProceed.set(true);
+        break;
+      case 'rejected':
+        joinRejected.set(msg.reason);
         break;
     }
   };
 
   peerNet.start();
+  // Claim our seat.  Queued like any other message, so it survives a slow or
+  // flaky connect and always reaches the host before our first action.
+  peerNet.sendHello(seatToken(roomId), seatName(roomId));
+  watchdogTimer = setInterval(hostSilenceWatchdog, HOST_WATCHDOG_TICK_MS);
 }
 
 /** Host calls this when clicking "Done" — signals all peers to advance past the lobby. */
 export function hostProceed(): void {
+  pastLobby = true;
   hostNet?.broadcast({ type: 'proceedToSetup' });
-  hostNet?.stopPolling();
+  updateHostPolling();
 }
 
 export function getConnectedPeerIds(): string[] {
@@ -647,6 +897,7 @@ export function getConnectedPeerIds(): string[] {
  */
 export function _resetNetworkForTests(): void {
   if (heartbeatTimer !== null) { clearInterval(heartbeatTimer); heartbeatTimer = null; }
+  if (watchdogTimer !== null) { clearInterval(watchdogTimer); watchdogTimer = null; }
   hostNet?.close();
   peerNet?.close();
   hostNet = null;
@@ -654,6 +905,11 @@ export function _resetNetworkForTests(): void {
   stopBots?.();
   stopBots = null;
   peerPlayerIndex.clear();
+  peerTokens.clear();
+  seatTokens.clear();
+  pastLobby = false;
+  peerRoomId = null;
+  lastHostMsgAt = 0;
   msgVersions = new VersionCounter();
   hostMsgGate = new VersionGate();
   networkMode.set('standalone');
@@ -663,6 +919,10 @@ export function _resetNetworkForTests(): void {
   lobbyProceed.set(false);
   localPlayerId.set(null);
   myPlayerIndex.set(null);
+  connectedSeats.set([]);
+  hostLinkUp.set(true);
+  queuedActionCount.set(0);
+  joinRejected.set(null);
   lobbyState.set({ players: [{ name: '', isBot: false }], startingChips: 50, enforceTimeLimit: false });
 }
 

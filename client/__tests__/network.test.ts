@@ -11,6 +11,9 @@ const stateMsg = (v: number): HostMsg =>
   ({ type: 'pendingDecision', v, payload: null });
 const forcedBets: SerializedAction = { name: 'doForcedBets' };
 
+const actionNames = (msgs: PeerMsg[]): string[] =>
+  msgs.filter((m) => m.type === 'action').map((m) => m.payload.name);
+
 describe('HostNetwork / PeerNetwork over InMemoryRoom', () => {
   let room: InMemoryRoom;
   let host: HostNetwork;
@@ -91,7 +94,7 @@ describe('HostNetwork / PeerNetwork over InMemoryRoom', () => {
     expect(peer.pendingActionCount()).toBe(2);
 
     room.connectPeer('p1');
-    expect(hostReceived.map((m) => m.payload.name)).toEqual(['doForcedBets', 'doNextRound']);
+    expect(actionNames(hostReceived)).toEqual(['doForcedBets', 'doNextRound']);
     expect(peer.pendingActionCount()).toBe(0);
   });
 
@@ -107,7 +110,7 @@ describe('HostNetwork / PeerNetwork over InMemoryRoom', () => {
 
     room.shouldDrop = null;
     vi.advanceTimersByTime(ACTION_RETRY_BASE_MS);
-    expect(hostReceived.map((m) => m.payload.name)).toEqual(['doForcedBets']);
+    expect(actionNames(hostReceived)).toEqual(['doForcedBets']);
     expect(peer.pendingActionCount()).toBe(0);
   });
 

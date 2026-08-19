@@ -1,7 +1,10 @@
 <script lang="ts">
   import { onDestroy } from 'svelte';
   import { get } from 'svelte/store';
-  import { gameState, pendingDecision, isDealing, resolveDecision, networkMode, localPlayerId } from './gameStore';
+  import {
+    gameState, pendingDecision, isDealing, resolveDecision, networkMode, localPlayerId,
+    seatOnline, hostLinkUp, queuedActionCount,
+  } from './gameStore';
   import type { DealtPlayer, Card } from './gameStore';
   import Setup from './components/Setup.svelte';
   import ForcedBet from './components/ForcedBet.svelte';
@@ -36,6 +39,9 @@
   /** True once the user has finished (or skipped) network setup. */
   let networkConfigured = $state(false);
 
+  /** Connection dots are only meaningful when there are connections to lose. */
+  const showPresence = $derived($networkMode !== 'standalone');
+
   // Peers auto-proceed past the lobby as soon as the host starts the game
   // and broadcasts the first game state.
   $effect(() => {
@@ -62,6 +68,18 @@
     {/if}
   {/if}
 </header>
+
+<!-- ── Reconnection banner ──────────────────────────────────────────────────── -->
+{#if $networkMode === 'peer' && !$hostLinkUp}
+  <p role="status" style="background-color: #ffe0e0; padding: 0.5em; border: 1px solid #b00;">
+    <strong>Reconnecting to the host…</strong>
+    {#if $queuedActionCount > 0}
+      Your move has been saved and will be sent the moment the connection is back.
+    {:else}
+      The game will catch up automatically once the connection returns.
+    {/if}
+  </p>
+{/if}
 
 <hr />
 
@@ -155,18 +173,26 @@
           </tr>
         </thead>
         <tbody>
-          {#each $gameState.players as player}
+          {#each $gameState.players as player, i}
             {@const isMe = player.id === $localPlayerId}
+            {@const online = $seatOnline[i] ?? true}
             {@const isActive = player.id === activePlayerId && (phase === 'betting-1' || phase === 'betting-2')}
             {@const showSecret = !$localPlayerId || isMe || (phase === 'results' && !player.folded)}
             {@const showEquations = !$localPlayerId || isMe || phase === 'results'}
             {@const dealt = 'secretCard' in player && player.secretCard !== null ? player as DealtPlayer : null}
             <tr style={(isMe || isActive) ? 'background-color: #fffbcc; font-weight: bold;' : ''}>
               <td>
+                {#if showPresence}
+                  <span
+                    style={online ? 'color: #2a8a2a;' : 'color: #b00;'}
+                    title={online ? 'Connected' : 'Disconnected — reconnecting'}
+                  >{online ? '●' : '○'}</span>
+                {/if}
                 {player.name}
                 {#if $gameState && $gameState.players.indexOf(player) === $gameState.dealerIndex} (D){/if}
                 {#if isActive} ◀{/if}
                 {#if player.folded} (folded){/if}
+                {#if showPresence && !online} <em>(offline)</em>{/if}
               </td>
               <td>{player.chips}</td>
               <td>{player.currentBet}</td>

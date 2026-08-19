@@ -10,8 +10,8 @@
  * Delivery is synchronous and deterministic — no timers, no reordering.
  */
 
-import type { Transport } from '../transport';
-import { HOST_CLIENT_ID } from '../network';
+import type { Transport, PollingMode } from '../transport';
+import { HOST_CLIENT_ID, encodeMsg } from '../network';
 
 const dec = new TextDecoder();
 
@@ -19,6 +19,9 @@ export class InMemoryTransport implements Transport {
   onPeerConnect: ((peerId: string) => void) | null = null;
   onPeerClose: ((peerId: string) => void) | null = null;
   onMessage: ((peerId: string, data: Uint8Array) => void) | null = null;
+
+  /** Last mode requested — there is no real signalling, so tests just read it. */
+  pollingMode: PollingMode = 'active';
 
   constructor(private room: InMemoryRoom, readonly clientId: string) {}
 
@@ -32,7 +35,9 @@ export class InMemoryTransport implements Transport {
     this.room.broadcastFrom(this.clientId, data);
   }
 
-  stopPolling(): void {}
+  setPollingMode(mode: PollingMode): void {
+    this.pollingMode = mode;
+  }
 
   close(): void {
     this.room.removeParticipant(this.clientId);
@@ -94,6 +99,10 @@ export class InMemoryRoom {
     return this.liveLinks.has(peerId);
   }
 
+  peerTransport(peerId: string): InMemoryTransport {
+    return this.mustGetPeer(peerId);
+  }
+
   deliver(from: string, to: string, data: Uint8Array): void {
     const linkPeerId = from === HOST_CLIENT_ID ? to : from;
     // Silent drop when the link is down — mirrors p2pcf.
@@ -128,6 +137,17 @@ export class InMemoryRoom {
     if (!t) throw new Error(`unknown peer id: ${peerId}`);
     return t;
   }
+}
+
+/**
+ * Claim a seat from a raw transport, for tests that don't want a whole
+ * PeerNetwork.  Hello is always a peer's first message, so its delivery
+ * counter is 1.
+ */
+export function sayHello(t: InMemoryTransport, token: string, name = ''): void {
+  t.send(HOST_CLIENT_ID, encodeMsg({
+    type: 'hello', actionId: `${t.clientId}:1`, token, name,
+  }));
 }
 
 /** Decode a wire message back to JSON for assertions. */

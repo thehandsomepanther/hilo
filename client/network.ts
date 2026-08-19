@@ -22,7 +22,7 @@
 
 import type { GameState, Player, MultiplicationDecision } from '../src/types';
 import type { BettingAction } from '../src/game';
-import type { Transport } from './transport';
+import type { Transport, PollingMode } from './transport';
 import {
   OutboundActionQueue, InboundActionFilter, ACTION_RETRY_TICK_MS,
 } from './protocol';
@@ -48,11 +48,19 @@ export type HostMsg =
   | { type: 'state'; v: number; payload: GameState }
   | { type: 'pendingDecision'; v: number; payload: { player: Player } | null }
   | { type: 'lobby'; v: number; payload: LobbyState }
+  // Seats whose player currently has a live connection to the host, so every
+  // client can show the same per-player connection indicator.
+  | { type: 'connections'; v: number; payload: number[] }
   | { type: 'slotAssignment'; payload: { playerIndex: number } }
   | { type: 'proceedToSetup' }
   // Confirms receipt of a peer action so the peer can stop retrying it.
   // Consumed inside PeerNetwork; never surfaces to gameStore.
-  | { type: 'ack'; actionId: string };
+  | { type: 'ack'; actionId: string }
+  // The host refused this connection a seat (see JoinRejection).
+  | { type: 'rejected'; reason: JoinRejection };
+
+/** Why a host turned a connection away.  Peers map these to user-facing copy. */
+export type JoinRejection = 'game-in-progress';
 
 /**
  * All game actions a peer can invoke, serialised for network transport.
@@ -86,8 +94,28 @@ export type ActionMsg = {
   payload: SerializedAction;
 };
 
+/**
+ * A peer's opening message, claiming an identity rather than a connection.
+ * `token` persists across page loads, so the host can hand a returning player
+ * back the seat they already had instead of appending a new one.  `name` is
+ * only a proposal — it is used when the token is new, never to rename an
+ * existing seat.
+ *
+ * Hello rides the same queue as actions, so it is retried until acked and is
+ * always delivered before any action from the same peer.
+ */
+export type HelloMsg = {
+  type: 'hello';
+  actionId: string;
+  token: string;
+  name: string;
+};
+
 /** Messages sent from a peer to the host. */
-export type PeerMsg = ActionMsg;
+export type PeerMsg = ActionMsg | HelloMsg;
+
+/** A peer message before the outbound queue stamps it with an id. */
+export type OutboundPeerMsg = Omit<ActionMsg, 'actionId'> | Omit<HelloMsg, 'actionId'>;
 
 // ─── Encoding helpers ─────────────────────────────────────────────────────────
 
@@ -139,6 +167,7 @@ export class HostNetwork {
   private inbound = new InboundActionFilter();
 
   onConnected: ((peerId: string) => void) | null = null;
+  onDisconnected: ((peerId: string) => void) | null = null;
   onMessage: ((peerId: string, msg: PeerMsg) => void) | null = null;
 
   constructor(private transport: Transport) {
@@ -148,6 +177,7 @@ export class HostNetwork {
     };
     transport.onPeerClose = (peerId) => {
       this.peerIds.delete(peerId);
+      this.onDisconnected?.(peerId);
     };
     transport.onMessage = (peerId, data) => {
       this.receive(peerId, decodeMsg<PeerMsg>(data));
@@ -155,7 +185,7 @@ export class HostNetwork {
   }
 
   private receive(peerId: string, msg: PeerMsg): void {
-    if (msg.type !== 'action') return;
+    if (msg.type !== 'action' && msg.type !== 'hello') return;
     switch (this.inbound.admit(peerId, msg.actionId)) {
       case 'apply':
         // Dispatch first, ack second: the ack means "applied", and a lost one
@@ -193,8 +223,12 @@ export class HostNetwork {
     return [...this.peerIds];
   }
 
-  stopPolling(): void {
-    this.transport.stopPolling();
+  isPeerConnected(peerId: string): boolean {
+    return this.peerIds.has(peerId);
+  }
+
+  setPollingMode(mode: PollingMode): void {
+    this.transport.setPollingMode(mode);
   }
 
   close(): void {
@@ -220,7 +254,10 @@ export class PeerNetwork {
   private retryTimer: ReturnType<typeof setInterval> | null = null;
 
   onConnected: (() => void) | null = null;
+  onDisconnected: (() => void) | null = null;
   onMessage: ((msg: HostMsg) => void) | null = null;
+  /** Fired whenever the unacked-action count changes (drives the UI banner). */
+  onPendingChange: ((count: number) => void) | null = null;
 
   constructor(private transport: Transport) {
     this.queue = new OutboundActionQueue(transport.clientId);
@@ -233,13 +270,18 @@ export class PeerNetwork {
       this.flush();
     };
     transport.onPeerClose = (peerId) => {
-      if (peerId === HOST_CLIENT_ID) this.hostConnected = false;
+      if (peerId !== HOST_CLIENT_ID) return;
+      this.hostConnected = false;
+      this.onDisconnected?.();
     };
     transport.onMessage = (peerId, data) => {
       if (peerId !== HOST_CLIENT_ID) return;
       const msg = decodeMsg<HostMsg>(data);
       // Acks are delivery bookkeeping — retire the action, tell no one.
-      if (msg.type === 'ack') { this.queue.ack(msg.actionId); return; }
+      if (msg.type === 'ack') {
+        if (this.queue.ack(msg.actionId)) this.onPendingChange?.(this.queue.pendingActions);
+        return;
+      }
       this.onMessage?.(msg);
     };
   }
@@ -249,9 +291,22 @@ export class PeerNetwork {
     this.retryTimer ??= setInterval(() => this.flush(), ACTION_RETRY_TICK_MS);
   }
 
+  /**
+   * Claim a seat.  Must be the peer's first message; the queue guarantees the
+   * host sees it before any action, and retries it until acked.
+   */
+  sendHello(token: string, name: string): string {
+    return this.enqueue({ type: 'hello', token, name });
+  }
+
   /** Queue an action for the host and try to send it right away. */
   sendAction(payload: SerializedAction, playerId: string | null = null): string {
-    const { actionId } = this.queue.enqueue(payload, playerId);
+    return this.enqueue({ type: 'action', playerId, payload });
+  }
+
+  private enqueue(msg: OutboundPeerMsg): string {
+    const { actionId } = this.queue.enqueue(msg);
+    this.onPendingChange?.(this.queue.pendingActions);
     this.flush();
     return actionId;
   }
@@ -265,15 +320,15 @@ export class PeerNetwork {
 
   /** Actions sent but not yet acked.  Nonzero means "the host hasn't heard us". */
   pendingActionCount(): number {
-    return this.queue.size;
+    return this.queue.pendingActions;
   }
 
   isConnected(): boolean {
     return this.hostConnected;
   }
 
-  stopPolling(): void {
-    this.transport.stopPolling();
+  setPollingMode(mode: PollingMode): void {
+    this.transport.setPollingMode(mode);
   }
 
   close(): void {

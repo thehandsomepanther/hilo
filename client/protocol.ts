@@ -24,15 +24,15 @@
  * player).
  */
 
-import type { HostMsg, ActionMsg, SerializedAction } from './network';
+import type { HostMsg, PeerMsg, OutboundPeerMsg } from './network';
 
 // ─── host → peer: versioned snapshots ────────────────────────────────────────
 
 /** Host → peer message types that carry a version stamp. */
-export type VersionedMsgType = 'state' | 'pendingDecision' | 'lobby';
+export type VersionedMsgType = 'state' | 'pendingDecision' | 'lobby' | 'connections';
 
 const VERSIONED_TYPES: ReadonlySet<string> = new Set<VersionedMsgType>([
-  'state', 'pendingDecision', 'lobby',
+  'state', 'pendingDecision', 'lobby', 'connections',
 ]);
 
 export function isVersionedMsg(
@@ -54,6 +54,7 @@ export class VersionCounter {
     state: 0,
     pendingDecision: 0,
     lobby: 0,
+    connections: 0,
   };
 
   next(type: VersionedMsgType): number {
@@ -75,6 +76,7 @@ export class VersionGate {
     state: 0,
     pendingDecision: 0,
     lobby: 0,
+    connections: 0,
   };
 
   accept(msg: HostMsg): boolean {
@@ -121,24 +123,22 @@ export function parseActionId(actionId: string): { clientId: string; counter: nu
  */
 export class OutboundActionQueue {
   private counter = 0;
-  private pending: ActionMsg[] = [];
+  private pending: PeerMsg[] = [];
   private attempts = 0;
   private nextAttemptAt = 0;
 
   constructor(private clientId: string) {}
 
-  /** Append an action and make the whole queue due immediately. */
-  enqueue(payload: SerializedAction, playerId: string | null): ActionMsg {
-    const msg: ActionMsg = {
-      type: 'action',
+  /** Stamp a message with the next id and make the whole queue due immediately. */
+  enqueue(msg: OutboundPeerMsg): PeerMsg {
+    const stamped = {
+      ...msg,
       actionId: makeActionId(this.clientId, ++this.counter),
-      playerId,
-      payload,
-    };
-    this.pending.push(msg);
+    } as PeerMsg;
+    this.pending.push(stamped);
     this.attempts = 0;
     this.nextAttemptAt = 0;
-    return msg;
+    return stamped;
   }
 
   /**
@@ -146,7 +146,7 @@ export class OutboundActionQueue {
    * Calling this arms the next backoff interval, so callers must actually send
    * what it returns.
    */
-  due(now: number): ActionMsg[] {
+  due(now: number): PeerMsg[] {
     if (this.pending.length === 0 || now < this.nextAttemptAt) return [];
     this.attempts += 1;
     this.nextAttemptAt = now + backoffDelay(this.attempts);
@@ -170,6 +170,11 @@ export class OutboundActionQueue {
 
   get size(): number {
     return this.pending.length;
+  }
+
+  /** Unacked *actions* — moves the player made that the host hasn't taken yet. */
+  get pendingActions(): number {
+    return this.pending.filter((m) => m.type === 'action').length;
   }
 
   pendingIds(): string[] {

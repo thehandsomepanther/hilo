@@ -46,6 +46,7 @@ describe('reliable peer actions', () => {
     await setupAsHost('TESTROOM', undefined, room.hostTransport);
     peer = new PeerNetwork(room.addPeer(PEER_ID));
     peer.start();
+    peer.sendHello('token-guest', 'Guest');
     room.connectPeer(PEER_ID);
     gameState.set(bettingState());
   });

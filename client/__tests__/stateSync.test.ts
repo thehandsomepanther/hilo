@@ -20,7 +20,7 @@ import {
 import { encodeMsg } from '../network';
 import type { HostMsg, PeerMsg } from '../network';
 import { HEARTBEAT_INTERVAL_MS } from '../protocol';
-import { InMemoryRoom, collectMessages } from '../testing/inMemoryTransport';
+import { InMemoryRoom, collectMessages, sayHello } from '../testing/inMemoryTransport';
 import { createGame, startRound } from '../../src/game';
 import type { GameState } from '../../src/types';
 
@@ -52,11 +52,13 @@ describe('host state sync', () => {
   beforeEach(async () => {
     room = new InMemoryRoom();
     await setupAsHost('TESTROOM', undefined, room.hostTransport);
-    received = collectMessages<HostMsg>(room.addPeer('p1'));
+    const transport = room.addPeer('p1');
+    received = collectMessages<HostMsg>(transport);
     room.connectPeer('p1');
+    sayHello(transport, 'token-p1'); // seats are granted by hello, not by connecting
   });
 
-  it('assigns a slot and sends current snapshots to a newly connected peer', () => {
+  it('assigns a slot and sends current snapshots to a peer that says hello', () => {
     const slot = received.find((m) => m.type === 'slotAssignment');
     expect(slot?.payload).toEqual({ playerIndex: 1 });
     const lobbies = received.filter((m) => m.type === 'lobby');
@@ -206,10 +208,17 @@ describe('peer state sync', () => {
     expect(get(myPlayerIndex)).toBe(1);
   });
 
-  it('forwards actions to the host in a delivery envelope', () => {
-    doForcedBets(); // networkMode is 'peer' → serialized and sent to the host
+  it('opens with a hello, then forwards actions in a delivery envelope', () => {
     expect(hostReceived).toEqual([
-      { type: 'action', actionId: `${PEER_ID}:1`, playerId: null, payload: { name: 'doForcedBets' } },
+      { type: 'hello', actionId: `${PEER_ID}:1`, token: expect.any(String), name: '' },
+    ]);
+
+    doForcedBets(); // networkMode is 'peer' → serialized and sent to the host
+    // There is no HostNetwork here to ack anything, so the flush resends the
+    // whole unacked queue: the hello again, then the new action.
+    expect(hostReceived.slice(1)).toEqual([
+      { type: 'hello', actionId: `${PEER_ID}:1`, token: expect.any(String), name: '' },
+      { type: 'action', actionId: `${PEER_ID}:2`, playerId: null, payload: { name: 'doForcedBets' } },
     ]);
   });
 });

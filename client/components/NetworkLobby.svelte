@@ -1,5 +1,8 @@
 <script lang="ts">
-  import { setupAsHost, setupAsPeer, generateRoomId, hostProceed, lobbyState, myPlayerIndex, lobbyProceed } from '../gameStore';
+  import {
+    setupAsHost, setupAsPeer, generateRoomId, hostProceed,
+    lobbyState, myPlayerIndex, lobbyProceed, joinRejected,
+  } from '../gameStore';
 
   type Props = { oncomplete: () => void };
   const { oncomplete }: Props = $props();
@@ -59,27 +62,51 @@
   // Auto-advance when the host broadcasts proceedToSetup.
   $effect(() => { if ($lobbyProceed) oncomplete(); });
 
+  // The host can refuse a seat — most often because the game already started.
+  $effect(() => {
+    if ($joinRejected === null) return;
+    peerJoined = false;
+    peerError = 'That game is already in progress, so no new players can join. '
+      + 'Ask the host to finish the round and start a new game.';
+  });
+
+  /**
+   * Put the room in the address bar (no history entry), so reloading the tab
+   * re-joins instead of dumping the player back at the front page.  Together
+   * with the per-tab seat token this is what makes a refresh recoverable: the
+   * peer rejoins the same room and the host hands back the same seat.
+   */
+  function keepRoomInUrl(code: string, worker: string) {
+    const url = new URL(window.location.href);
+    url.search = '';
+    url.searchParams.set('room', code);
+    if (worker) url.searchParams.set('worker', worker);
+    history.replaceState(null, '', url.toString());
+  }
+
   function joinGame() {
     const code = roomInput.trim().toUpperCase();
     if (code.length < 4) { peerError = 'Enter the room code from the host.'; return; }
     peerError = '';
     peerJoined = true;
-    setupAsPeer(code, workerUrl.trim() || undefined);
+    const worker = workerUrl.trim();
+    setupAsPeer(code, worker || undefined);
+    keepRoomInUrl(code, worker);
   }
 
-  // ─── Auto-join from invite URL ────────────────────────────────────────────────
+  // ─── Auto-join from invite URL (or from a reload) ─────────────────────────────
 
   const params = new URLSearchParams(window.location.search);
   const roomParam = params.get('room');
   if (roomParam) {
     const workerParam = params.get('worker') ?? '';
+    const code = roomParam.toUpperCase();
     workerUrl = workerParam;
-    roomInput = roomParam.toUpperCase();
+    roomInput = code;
     mode = 'peer';
     peerJoined = true;
-    setupAsPeer(roomParam.toUpperCase(), workerParam || undefined);
-    // Clean up URL bar without adding a history entry.
-    history.replaceState(null, '', window.location.pathname);
+    setupAsPeer(code, workerParam || undefined);
+    keepRoomInUrl(code, workerParam);
   }
 
   // ─── Clipboard helper ────────────────────────────────────────────────────────

@@ -22,6 +22,7 @@ client/        UI and orchestration layer
   dealing.ts       Step machine for interactive dealing (× card decisions)
   network.ts       Message layer: HostNetwork, PeerNetwork, wire types
   protocol.ts      Delivery reliability: snapshot versioning, action queue/dedup
+  identity.ts      Peer's persistent seat token (survives a reload)
   transport.ts     Byte-level Transport interface
   p2pcfTransport.ts  Production Transport (WebRTC via p2pcf)
   testing/         In-memory Transport with fault injection, for tests
@@ -154,7 +155,7 @@ At the end of the `high-low-bet` phase, `resolveRound` (in `src/results.ts`) awa
 
 ## Networking
 
-The networking layer uses WebRTC data channels. No signaling server is involved — connection establishment is handled out-of-band by copying base-64 encoded SDP blobs between players (e.g. by text or QR code).
+The networking layer uses WebRTC data channels, with a Cloudflare Worker (p2pcf) for signalling and room discovery only — players share a 6-character room code, and no game data passes through the Worker.
 
 **Authority model**: the host tab is the single source of truth. It runs the full game engine locally. Every `gameState` change triggers a broadcast to all connected peers. Peers never run game logic — they display state received from the host and forward their actions as serialized messages.
 
@@ -168,6 +169,12 @@ Peer tab:  displays GameState ← from host    → sends SerializedAction → to
 **Versioned snapshots and heartbeat** (host → peer): `state`, `pendingDecision`, and `lobby` messages carry a per-type monotonic version stamped by the host (`client/protocol.ts`). Peers apply a message only if its version is newer than the last applied for that type. While a game is active, the host rebroadcasts its current snapshots every 3 seconds at their *current* versions — peers that already have them drop the duplicates, and a peer that missed a broadcast (connection blip; the transport drops sends silently when a link is down) self-heals within one heartbeat instead of freezing. The same resend happens immediately when a peer connects.
 
 **Acked actions** (peer → host): each action goes out in an envelope carrying `actionId` (`<clientId>:<counter>`) and the sender's `playerId`, and stays in `PeerNetwork`'s `OutboundActionQueue` until the host acks it. Sends made while the link is down are queued rather than dropped, and unacked actions are retried with exponential backoff (500 ms → 4 s), the whole queue at once so the host never sees a counter gap. The host's `InboundActionFilter` admits each counter exactly once per sending connection: retries that arrive because an *ack* was lost are re-acked but not re-dispatched, which matters because a double-applied betting action would act as the next player. Acks are consumed inside `PeerNetwork` and never reach `gameStore`.
+
+**Seats and reconnection**: a connection earns nothing on its own — a peer claims a seat by sending `hello { token, name }`, which rides the same acked queue and so always arrives before its first action. The token lives in sessionStorage keyed by room (`client/identity.ts`): it survives a reload, which is the case worth recovering, while staying per-tab so two peer tabs in one browser remain two players. The host keeps `token → seat` and hands a returning player their seat back, re-pointing the connection maps at the new transport id and re-sending every snapshot. A token it has never seen is refused (`rejected: 'game-in-progress'`) once a game is underway, rather than being appended to the lobby mid-round. A link that merely blipped comes back on the same transport id and is recognised without a fresh hello.
+
+**Signalling rates**: p2pcf's polling loop is also its reconnection mechanism, so it is never switched off — `Transport.setPollingMode` moves between `'active'` (normal discovery) and `'idle'` (a 45 s keepalive). The host idles only once the lobby has closed *and* every seated player is connected, and returns to active the moment anyone drops; peers do the same for their own link. The cost is a trickle of Worker traffic in exchange for mid-game recovery.
+
+**Presence**: the host tracks which seats have a live connection and broadcasts the list as a versioned `connections` message, so every client renders the same per-player indicator (`seatOnline` folds in bots and standalone, which are always present). Peers additionally watch their own link with `hostLinkUp`, driven by `peerclose` *and* by heartbeat silence — a half-open WebRTC channel can go quiet long before it reports closing. A peer that believes it is offline shows a banner rather than disabling controls: actions taken while disconnected are queued and delivered on reconnect, so the honest message is "saved, will send", not "unavailable".
 
 **Transport abstraction**: `HostNetwork`/`PeerNetwork` (message layer, `client/network.ts`) sit on a byte-level `Transport` interface (`client/transport.ts`). Production injects a p2pcf-backed transport (`client/p2pcfTransport.ts`, loaded via dynamic import so Node tests never touch p2pcf's browser-only dependencies); tests inject `InMemoryRoom`/`InMemoryTransport` (`client/testing/inMemoryTransport.ts`), which reproduce the silent-drop failure semantics with injectable message loss and link up/down control.
 

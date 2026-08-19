@@ -1,6 +1,6 @@
 <script lang="ts">
   import {
-    lobbyState, myPlayerIndex, networkMode,
+    lobbyState, myPlayerIndex, networkMode, seatOnline,
     addPlayer, removePlayer, updateLobbyName, updateStartingChips, updateEnforceTimeLimit,
     initGame, addBot,
   } from '../gameStore';
@@ -48,7 +48,14 @@
     <legend>Players</legend>
 
     {#each $lobbyState.players as player, i}
+      {@const online = $seatOnline[i] ?? true}
       <label>
+        {#if !isStandalone}
+          <span
+            style={online ? 'color: #2a8a2a;' : 'color: #b00;'}
+            title={online ? 'Connected' : 'Disconnected — reconnecting'}
+          >{online ? '●' : '○'}</span>
+        {/if}
         {#if player.isBot}
           <strong>Player {i + 1} (Bot)</strong>
         {:else if isMine(i)}

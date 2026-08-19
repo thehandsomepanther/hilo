@@ -26,9 +26,15 @@ declare module 'p2pcf' {
     broadcast(data: Uint8Array): void;
     on(event: 'peerconnect'|'peerclose', handler: (peer: P2PCFPeer) => void): this;
     on(event: 'msg', handler: (peer: P2PCFPeer, data: ArrayBuffer) => void): this;
-    /** @internal — epoch ms before which _step skips fetching. Set to Infinity to pause polling. */
+    // The polling tier is chosen inside _step from these mutable fields, so
+    // writing them at runtime changes the rate of the next poll.
+    /** @internal — epoch ms before which _step skips fetching. */
     nextStepTime: number;
-    /** @internal — interval handle for NAT-type rechecks; null after clearing. */
-    networkSettingsInterval: ReturnType<typeof setInterval> | null;
+    /** @internal — epoch ms after which the idle rate applies. */
+    startIdlePollingAt: number;
+    /** @internal — how long after the last peer change idle polling begins. */
+    idlePollingAfterMs: number;
+    /** @internal — poll interval once idle. */
+    idlePollingRateMs: number;
   }
 }

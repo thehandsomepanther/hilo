@@ -108,16 +108,16 @@ describe('parseActionId', () => {
 describe('OutboundActionQueue', () => {
   it('stamps actions with monotonic ids scoped to the client', () => {
     const q = new OutboundActionQueue('ABCD');
-    expect(q.enqueue(fold, 'player-1')).toEqual({
+    expect(q.enqueue({ type: 'action', playerId: 'player-1', payload: fold })).toEqual({
       type: 'action', actionId: 'ABCD:1', playerId: 'player-1', payload: fold,
     });
-    expect(q.enqueue(next, 'player-1').actionId).toBe('ABCD:2');
+    expect(q.enqueue({ type: 'action', playerId: 'player-1', payload: next }).actionId).toBe('ABCD:2');
   });
 
   it('holds actions until acked, oldest first', () => {
     const q = new OutboundActionQueue('ABCD');
-    q.enqueue(fold, null);
-    q.enqueue(next, null);
+    q.enqueue({ type: 'action', playerId: null, payload: fold });
+    q.enqueue({ type: 'action', playerId: null, payload: next });
     expect(q.due(0).map((m) => m.actionId)).toEqual(['ABCD:1', 'ABCD:2']);
 
     expect(q.ack('ABCD:1')).toBe(true);
@@ -128,16 +128,16 @@ describe('OutboundActionQueue', () => {
 
   it('resends the whole queue on each retry so the host never sees a gap', () => {
     const q = new OutboundActionQueue('ABCD');
-    q.enqueue(fold, null);
+    q.enqueue({ type: 'action', playerId: null, payload: fold });
     q.due(0);
-    q.enqueue(next, null); // arrives mid-backoff
+    q.enqueue({ type: 'action', playerId: null, payload: next }); // arrives mid-backoff
     // The new action makes everything due again — the unacked head rides along.
     expect(q.due(0).map((m) => m.actionId)).toEqual(['ABCD:1', 'ABCD:2']);
   });
 
   it('backs off exponentially, capped at ACTION_RETRY_MAX_MS', () => {
     const q = new OutboundActionQueue('ABCD');
-    q.enqueue(fold, null);
+    q.enqueue({ type: 'action', playerId: null, payload: fold });
 
     expect(q.due(0)).toHaveLength(1);
     expect(q.due(ACTION_RETRY_BASE_MS - 1)).toEqual([]);
@@ -156,8 +156,8 @@ describe('OutboundActionQueue', () => {
 
   it('restarts the backoff ramp when an ack proves the link works', () => {
     const q = new OutboundActionQueue('ABCD');
-    q.enqueue(fold, null);
-    q.enqueue(next, null);
+    q.enqueue({ type: 'action', playerId: null, payload: fold });
+    q.enqueue({ type: 'action', playerId: null, payload: next });
 
     q.due(0);                      // round 1 → next retry one base interval out
     q.due(ACTION_RETRY_BASE_MS);   // round 2 → next retry two intervals out
@@ -171,7 +171,7 @@ describe('OutboundActionQueue', () => {
   it('has nothing due when the queue is empty', () => {
     const q = new OutboundActionQueue('ABCD');
     expect(q.due(0)).toEqual([]);
-    q.enqueue(fold, null);
+    q.enqueue({ type: 'action', playerId: null, payload: fold });
     q.ack('ABCD:1');
     expect(q.due(10_000)).toEqual([]);
     expect(q.pendingIds()).toEqual([]);
@@ -179,7 +179,7 @@ describe('OutboundActionQueue', () => {
 
   it('makes everything due immediately after a reconnect', () => {
     const q = new OutboundActionQueue('ABCD');
-    q.enqueue(fold, null);
+    q.enqueue({ type: 'action', playerId: null, payload: fold });
     q.due(0);
     expect(q.due(1)).toEqual([]); // mid-backoff
     q.resetBackoff();

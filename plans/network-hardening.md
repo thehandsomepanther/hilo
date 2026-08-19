@@ -118,7 +118,29 @@ next retry.
 - Dedup must land *before* retries do, or retried `doBettingAction`s will
   double-apply (a duplicated "call" would act as the next player).
 
-### Phase 3 — Reconnection and seat reclamation
+### Phase 3 — Reconnection and seat reclamation ✅ IMPLEMENTED
+
+Implemented in `client/transport.ts` + `client/p2pcfTransport.ts` (`setPollingMode`,
+replacing `stopPolling`), `client/identity.ts` (seat token), `client/network.ts`
+(`HelloMsg`, `rejected`, `connections`, `onDisconnected`), and
+`client/gameStore.ts` (`handleHello`, seat maps, presence stores, host-silence
+watchdog). UI: connection dots in `App.svelte`/`Setup.svelte`, a reconnecting
+banner, and a rejection message in `NetworkLobby.svelte`. Tests in
+`client/__tests__/reconnect.test.ts`.
+
+Two deliberate deviations from the sketch below:
+
+- **sessionStorage, not localStorage**, keyed per room. It survives the reload
+  this phase is about, but stays per-tab — with localStorage a second peer tab
+  in the same browser would claim the first tab's seat, which breaks local
+  playtesting and any household sharing a browser profile.
+- **Actions are queued, not disabled**, while disconnected. Phase 2 already
+  makes them reliable, so taking the move away would be a downgrade; the banner
+  says the move is saved and will send.
+
+Also needed for reload recovery to actually work: `NetworkLobby` now keeps
+`?room=` in the address bar instead of clearing it, so refreshing a peer tab
+rejoins the room rather than returning to the front page.
 
 - Replace permanent `stopPolling()` with the slow/idle polling rates p2pcf
   already supports (`slowPollingRateMs`/`idlePollingRateMs`), or re-enable
