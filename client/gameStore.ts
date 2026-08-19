@@ -36,8 +36,10 @@ import type { RoundResult } from '../src/types';
 import { evaluateEquation } from '../src/equation';
 import { startDealPhase1, startDealPhase2 } from './dealing';
 import type { DealStep } from './dealing';
-import { HostNetwork, PeerNetwork, generateRoomId, fetchIceServers } from './network';
+import { HostNetwork, PeerNetwork, generateClientId, HOST_CLIENT_ID } from './network';
 import type { SerializedAction, LobbyState } from './network';
+import type { Transport } from './transport';
+import { VersionCounter, VersionGate, HEARTBEAT_INTERVAL_MS } from './protocol';
 export { generateRoomId } from './network';
 import { startBotRunner } from './bots/botRunner';
 
@@ -86,6 +88,20 @@ let stopBots: (() => void) | null = null;
 const peerPlayerIndex = new Map<string, number>();
 
 /**
+ * Host side: per-message-type version counter (see protocol.ts).  New
+ * snapshots are stamped with `next()`; rebroadcasts of the same snapshot
+ * (heartbeat, late-joining peer) reuse `current()` so peers that already
+ * applied it drop the duplicate.
+ */
+let msgVersions = new VersionCounter();
+
+/** Peer side: drops stale/duplicate host messages by version. */
+let hostMsgGate = new VersionGate();
+
+/** Host side: rebroadcasts current snapshots every HEARTBEAT_INTERVAL_MS. */
+let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
+
+/**
  * During the high-low-bet phase, strip betChoice from every player except the
  * one who owns `playerIndex`.  Prevents peers from seeing each other's hidden
  * choices before the reveal.
@@ -99,27 +115,52 @@ function sanitizeStateForPeer(state: GameState, playerIndex: number): GameState 
   } as GameState;
 }
 
-// Broadcast state changes to peers.
-gameState.subscribe((s) => {
-  if (!s || !hostNet) return;
+/** Send a state snapshot to every peer, stamped with version `v`. */
+function broadcastState(s: GameState, v: number): void {
+  if (!hostNet) return;
   if (s.phase === 'high-low-bet') {
     // Send each peer only their own betChoice — others are hidden until reveal.
     for (const peerId of hostNet.getPeerIds()) {
       const idx = peerPlayerIndex.get(peerId);
       if (idx !== undefined) {
-        hostNet.send(peerId, { type: 'state', payload: sanitizeStateForPeer(s, idx) });
+        hostNet.send(peerId, { type: 'state', v, payload: sanitizeStateForPeer(s, idx) });
       }
     }
   } else {
-    hostNet.broadcast({ type: 'state', payload: s });
+    hostNet.broadcast({ type: 'state', v, payload: s });
   }
+}
+
+function broadcastPendingDecision(pd: PendingDecision | null, v: number): void {
+  hostNet?.broadcast({ type: 'pendingDecision', v, payload: pd ? { player: pd.player } : null });
+}
+
+// Broadcast state changes to peers.  Each change gets a fresh version.
+gameState.subscribe((s) => {
+  if (!s || !hostNet) return;
+  broadcastState(s, msgVersions.next('state'));
 });
 pendingDecision.subscribe((pd) => {
-  if (hostNet) hostNet.broadcast({ type: 'pendingDecision', payload: pd ? { player: pd.player } : null });
+  if (hostNet) broadcastPendingDecision(pd, msgVersions.next('pendingDecision'));
 });
 lobbyState.subscribe((ls) => {
-  if (hostNet) hostNet.broadcast({ type: 'lobby', payload: ls });
+  if (hostNet) hostNet.broadcast({ type: 'lobby', v: msgVersions.next('lobby'), payload: ls });
 });
+
+/**
+ * Heartbeat: while a game is active, rebroadcast the current snapshots at
+ * their CURRENT versions.  Peers that already applied them drop the
+ * duplicates; a peer that missed a broadcast (connection blip, silent send
+ * drop) is healed within one interval instead of freezing forever.
+ */
+function heartbeat(): void {
+  if (!hostNet) return;
+  const s = get(gameState);
+  if (!s) return;
+  broadcastState(s, msgVersions.current('state'));
+  broadcastPendingDecision(get(pendingDecision), msgVersions.current('pendingDecision'));
+  hostNet.broadcast({ type: 'lobby', v: msgVersions.current('lobby'), payload: get(lobbyState) });
+}
 
 // ─── Log helper ───────────────────────────────────────────────────────────────
 
@@ -482,10 +523,15 @@ export function submitBotBetChoice(playerId: string, choice: 'high' | 'low' | 's
 
 // ─── Networking setup ─────────────────────────────────────────────────────────
 
-export async function setupAsHost(roomId: string, workerUrl?: string): Promise<void> {
+export async function setupAsHost(roomId: string, workerUrl?: string, transport?: Transport): Promise<void> {
   if (hostNet) return;
-  const iceServers = await fetchIceServers(workerUrl);
-  hostNet = new HostNetwork(roomId, workerUrl, iceServers);
+  if (!transport) {
+    // p2pcf pulls in browser-only modules — load it lazily so Node (tests)
+    // never touches it.
+    const { createP2pcfTransport } = await import('./p2pcfTransport');
+    transport = await createP2pcfTransport(HOST_CLIENT_ID, roomId, workerUrl);
+  }
+  hostNet = new HostNetwork(transport);
   networkMode.set('host');
   myPlayerIndex.set(0);
   lobbyState.update((s) => ({ ...s, players: [{ name: '', isBot: false }] }));
@@ -498,22 +544,45 @@ export async function setupAsHost(roomId: string, workerUrl?: string): Promise<v
     const peerIndex = currentLobby.players.length - 1;
     peerPlayerIndex.set(pid, peerIndex);
     hostNet!.send(pid, { type: 'slotAssignment', payload: { playerIndex: peerIndex } });
-    hostNet!.send(pid, { type: 'lobby', payload: currentLobby });
+    // Resend current snapshots at their current versions — the peer's gate
+    // starts at 0, so it applies them; peers that already have them (via the
+    // lobbyState.update broadcast above) drop the duplicates.
+    hostNet!.send(pid, { type: 'lobby', v: msgVersions.current('lobby'), payload: currentLobby });
     const s = get(gameState);
     const pd = get(pendingDecision);
-    if (s)  hostNet!.send(pid, { type: 'state', payload: s });
-    if (pd) hostNet!.send(pid, { type: 'pendingDecision', payload: { player: pd.player } });
+    if (s) {
+      hostNet!.send(pid, {
+        type: 'state',
+        v: msgVersions.current('state'),
+        payload: sanitizeStateForPeer(s, peerIndex),
+      });
+    }
+    if (pd) {
+      hostNet!.send(pid, {
+        type: 'pendingDecision',
+        v: msgVersions.current('pendingDecision'),
+        payload: { player: pd.player },
+      });
+    }
   };
 
   hostNet.start();
+  heartbeatTimer = setInterval(heartbeat, HEARTBEAT_INTERVAL_MS);
 }
 
-export async function setupAsPeer(roomId: string, workerUrl?: string): Promise<void> {
-  const iceServers = await fetchIceServers(workerUrl);
-  peerNet = new PeerNetwork(roomId, workerUrl, iceServers);
+export async function setupAsPeer(roomId: string, workerUrl?: string, transport?: Transport): Promise<void> {
+  if (peerNet) return;
+  if (!transport) {
+    const { createP2pcfTransport } = await import('./p2pcfTransport');
+    transport = await createP2pcfTransport(generateClientId(), roomId, workerUrl);
+  }
+  peerNet = new PeerNetwork(transport);
   networkMode.set('peer');
 
   peerNet.onMessage = (msg) => {
+    // Drop stale/duplicate versions — the host rebroadcasts snapshots
+    // (heartbeat, reconnect) and only the newest of each type may apply.
+    if (!hostMsgGate.accept(msg)) return;
     switch (msg.type) {
       case 'state':
         gameState.set(msg.payload);
@@ -558,6 +627,31 @@ export function hostProceed(): void {
 
 export function getConnectedPeerIds(): string[] {
   return hostNet?.getConnectedPeerIds() ?? [];
+}
+
+/**
+ * Test-only: tear down networking and reset every module-level singleton so
+ * each test starts from a clean slate.  Not called from production code.
+ */
+export function _resetNetworkForTests(): void {
+  if (heartbeatTimer !== null) { clearInterval(heartbeatTimer); heartbeatTimer = null; }
+  hostNet?.close();
+  peerNet?.close();
+  hostNet = null;
+  peerNet = null;
+  stopBots?.();
+  stopBots = null;
+  peerPlayerIndex.clear();
+  msgVersions = new VersionCounter();
+  hostMsgGate = new VersionGate();
+  networkMode.set('standalone');
+  gameState.set(null);
+  isDealing.set(false);
+  pendingDecision.set(null);
+  lobbyProceed.set(false);
+  localPlayerId.set(null);
+  myPlayerIndex.set(null);
+  lobbyState.set({ players: [{ name: '', isBot: false }], startingChips: 50, enforceTimeLimit: false });
 }
 
 // ─── Host-side peer action dispatcher ────────────────────────────────────────

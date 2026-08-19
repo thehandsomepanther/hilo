@@ -1,42 +1,24 @@
 /**
- * network.ts — WebRTC networking via p2pcf (Cloudflare Worker signalling).
+ * network.ts — message-level networking: wire types plus the HostNetwork /
+ * PeerNetwork classes that speak them.
  *
- * Peers discover each other automatically by sharing a short room code.
- * No manual SDP blob exchange is required.
+ * Both classes sit on top of a byte-level `Transport` (see transport.ts).
+ * Production injects a p2pcf-backed transport (WebRTC data channels with
+ * Cloudflare Worker signalling); tests inject an in-memory transport with
+ * fault injection.
  *
- * Authority model is unchanged: the host runs the full game engine and
- * broadcasts GameState to all peers.  Peers forward serialized actions
- * to the host.
+ * Authority model: the host runs the full game engine and broadcasts
+ * GameState snapshots to all peers.  Peers forward serialized actions to the
+ * host.
+ *
+ * State-bearing host messages (`state`, `pendingDecision`, `lobby`) carry a
+ * per-type monotonic version `v` (see protocol.ts) so the host can safely
+ * rebroadcast snapshots — peers drop stale/duplicate versions.
  */
 
-import P2PCF from 'p2pcf';
-import type { P2PCFPeer } from 'p2pcf';
 import type { GameState, Player, MultiplicationDecision } from '../src/types';
 import type { BettingAction } from '../src/game';
-
-// ─── ICE servers ─────────────────────────────────────────────────────────────
-
-const STUN_ONLY: RTCIceServer[] = [
-  { urls: 'stun:stun1.l.google.com:19302' },
-  { urls: 'stun:global.stun.twilio.com:3478' },
-];
-
-/**
- * Fetch TURN credentials from the signalling worker's /turn-creds endpoint.
- * Falls back to STUN-only if the worker URL is unknown or the request fails.
- */
-export async function fetchIceServers(workerUrl?: string): Promise<RTCIceServer[]> {
-  if (!workerUrl) return STUN_ONLY;
-  try { new URL(workerUrl); } catch { return STUN_ONLY; }
-  try {
-    const res = await fetch(`${workerUrl}/turn-creds`);
-    if (!res.ok) return STUN_ONLY;
-    const turnServers = await res.json() as RTCIceServer[];
-    return turnServers.length > 0 ? [...STUN_ONLY, ...turnServers] : STUN_ONLY;
-  } catch {
-    return STUN_ONLY;
-  }
-}
+import type { Transport } from './transport';
 
 // ─── Lobby types ─────────────────────────────────────────────────────────────
 
@@ -50,11 +32,15 @@ export type LobbyState = {
 
 // ─── Wire message types ───────────────────────────────────────────────────────
 
-/** Messages sent from the host to every peer. */
+/**
+ * Messages sent from the host to every peer.
+ * `v` is a per-message-type monotonic version — peers ignore any message whose
+ * version is ≤ the last one they applied for that type.
+ */
 export type HostMsg =
-  | { type: 'state'; payload: GameState }
-  | { type: 'pendingDecision'; payload: { player: Player } | null }
-  | { type: 'lobby'; payload: LobbyState }
+  | { type: 'state'; v: number; payload: GameState }
+  | { type: 'pendingDecision'; v: number; payload: { player: Player } | null }
+  | { type: 'lobby'; v: number; payload: LobbyState }
   | { type: 'slotAssignment'; payload: { playerIndex: number } }
   | { type: 'proceedToSetup' };
 
@@ -85,13 +71,21 @@ export type PeerMsg = { type: 'action'; payload: SerializedAction };
 const enc = new TextEncoder();
 const dec = new TextDecoder();
 
-function encode(s: string): Uint8Array { return enc.encode(s); }
-function decode(b: ArrayBuffer): string { return dec.decode(b); }
+export function encodeMsg(msg: HostMsg | PeerMsg): Uint8Array {
+  return enc.encode(JSON.stringify(msg));
+}
 
-// ─── Room ID ──────────────────────────────────────────────────────────────────
+export function decodeMsg<T extends HostMsg | PeerMsg>(data: Uint8Array): T {
+  return JSON.parse(dec.decode(data)) as T;
+}
+
+// ─── Room / client IDs ───────────────────────────────────────────────────────
 
 // Unambiguous characters only (no O/0/I/1).
 const ROOM_CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+
+/** The fixed client id the host joins the room under. */
+export const HOST_CLIENT_ID = 'host';
 
 export function generateRoomId(): string {
   return Array.from(
@@ -100,148 +94,114 @@ export function generateRoomId(): string {
   ).join('');
 }
 
+/** Random client id for a peer (host is always HOST_CLIENT_ID). */
+export function generateClientId(): string {
+  return Array.from(
+    { length: 8 },
+    () => ROOM_CHARS[Math.floor(Math.random() * ROOM_CHARS.length)],
+  ).join('');
+}
+
 // ─── HostNetwork ─────────────────────────────────────────────────────────────
 
 /**
- * Host-side network.  The host's p2pcf client_id is always 'host' so peers
- * can identify it unambiguously in the mesh.
+ * Host-side network.  The host's transport client id is always
+ * HOST_CLIENT_ID so peers can identify it unambiguously in the mesh.
  */
 export class HostNetwork {
-  private p2pcf: P2PCF;
-  private peers = new Map<string, P2PCFPeer>();
+  private peerIds = new Set<string>();
 
   onConnected: ((peerId: string) => void) | null = null;
   onMessage: ((peerId: string, msg: PeerMsg) => void) | null = null;
 
-  constructor(roomId: string, workerUrl?: string, iceServers: RTCIceServer[] = STUN_ONLY) {
-    this.p2pcf = new P2PCF('host', roomId, {
-      workerUrl,
-      stunIceServers: iceServers,
-      turnIceServers: iceServers,
-      fastPollingRateMs: 2000,
-      slowPollingRateMs: 8000,
-      networkChangePollIntervalMs: 30000,
-    });
-
-    this.p2pcf.on('peerconnect', (peer) => {
-      this.peers.set(peer.client_id, peer);
-      this.onConnected?.(peer.client_id);
-    });
-
-    this.p2pcf.on('peerclose', (peer) => {
-      this.peers.delete(peer.client_id);
-    });
-
-    this.p2pcf.on('msg', (peer, data) => {
-      const msg = JSON.parse(decode(data)) as PeerMsg;
-      this.onMessage?.(peer.client_id, msg);
-    });
+  constructor(private transport: Transport) {
+    transport.onPeerConnect = (peerId) => {
+      this.peerIds.add(peerId);
+      this.onConnected?.(peerId);
+    };
+    transport.onPeerClose = (peerId) => {
+      this.peerIds.delete(peerId);
+    };
+    transport.onMessage = (peerId, data) => {
+      this.onMessage?.(peerId, decodeMsg<PeerMsg>(data));
+    };
   }
 
   start(): void {
-    this.p2pcf.start().catch((e) => console.error('[HostNetwork] start error', e));
+    this.transport.start();
   }
 
   send(peerId: string, msg: HostMsg): void {
-    const peer = this.peers.get(peerId);
-    if (peer) this.p2pcf.send(peer, encode(JSON.stringify(msg)));
+    if (this.peerIds.has(peerId)) this.transport.send(peerId, encodeMsg(msg));
   }
 
   broadcast(msg: HostMsg): void {
-    this.p2pcf.broadcast(encode(JSON.stringify(msg)));
+    this.transport.broadcast(encodeMsg(msg));
   }
 
   getPeerIds(): string[] {
-    return [...this.peers.keys()];
+    return [...this.peerIds];
   }
 
   getConnectedPeerIds(): string[] {
-    return [...this.peers.keys()];
+    return [...this.peerIds];
   }
 
   stopPolling(): void {
-    if (this.p2pcf.networkSettingsInterval !== null) {
-      clearInterval(this.p2pcf.networkSettingsInterval);
-      this.p2pcf.networkSettingsInterval = null;
-    }
-    this.p2pcf.nextStepTime = Infinity;
+    this.transport.stopPolling();
   }
 
   close(): void {
-    this.p2pcf.destroy();
-    this.peers.clear();
+    this.transport.close();
+    this.peerIds.clear();
   }
 }
 
 // ─── PeerNetwork ─────────────────────────────────────────────────────────────
 
 /**
- * Peer-side network.  Each peer gets a random client_id; it discovers the
- * host by looking for the peer whose client_id is 'host'.
+ * Peer-side network.  Ignores every mesh participant except the one whose
+ * client id is HOST_CLIENT_ID.
  */
 export class PeerNetwork {
-  private p2pcf: P2PCF;
-  private hostPeer: P2PCFPeer | null = null;
+  private hostConnected = false;
 
   onConnected: (() => void) | null = null;
   onMessage: ((msg: HostMsg) => void) | null = null;
 
-  constructor(roomId: string, workerUrl?: string, iceServers: RTCIceServer[] = STUN_ONLY) {
-    const clientId = Array.from(
-      { length: 8 },
-      () => ROOM_CHARS[Math.floor(Math.random() * ROOM_CHARS.length)],
-    ).join('');
-
-    this.p2pcf = new P2PCF(clientId, roomId, {
-      workerUrl,
-      stunIceServers: iceServers,
-      turnIceServers: iceServers,
-      fastPollingRateMs: 2000,
-      slowPollingRateMs: 8000,
-      networkChangePollIntervalMs: 30000,
-    });
-
-    this.p2pcf.on('peerconnect', (peer) => {
-      if (peer.client_id === 'host') {
-        this.hostPeer = peer;
+  constructor(private transport: Transport) {
+    transport.onPeerConnect = (peerId) => {
+      if (peerId === HOST_CLIENT_ID) {
+        this.hostConnected = true;
         this.onConnected?.();
       }
-    });
-
-    this.p2pcf.on('peerclose', (peer) => {
-      if (peer.client_id === 'host') this.hostPeer = null;
-    });
-
-    this.p2pcf.on('msg', (peer, data) => {
-      if (peer.client_id === 'host') {
-        const msg = JSON.parse(decode(data)) as HostMsg;
-        this.onMessage?.(msg);
-      }
-    });
+    };
+    transport.onPeerClose = (peerId) => {
+      if (peerId === HOST_CLIENT_ID) this.hostConnected = false;
+    };
+    transport.onMessage = (peerId, data) => {
+      if (peerId === HOST_CLIENT_ID) this.onMessage?.(decodeMsg<HostMsg>(data));
+    };
   }
 
   start(): void {
-    this.p2pcf.start().catch((e) => console.error('[PeerNetwork] start error', e));
+    this.transport.start();
   }
 
   send(msg: PeerMsg): void {
-    if (this.hostPeer) this.p2pcf.send(this.hostPeer, encode(JSON.stringify(msg)));
+    if (this.hostConnected) this.transport.send(HOST_CLIENT_ID, encodeMsg(msg));
   }
 
   isConnected(): boolean {
-    return this.hostPeer !== null;
+    return this.hostConnected;
   }
 
   stopPolling(): void {
-    if (this.p2pcf.networkSettingsInterval !== null) {
-      clearInterval(this.p2pcf.networkSettingsInterval);
-      this.p2pcf.networkSettingsInterval = null;
-    }
-    this.p2pcf.nextStepTime = Infinity;
+    this.transport.stopPolling();
   }
 
   close(): void {
-    this.p2pcf.destroy();
-    this.hostPeer = null;
+    this.transport.close();
+    this.hostConnected = false;
   }
 }

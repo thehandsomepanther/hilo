@@ -161,6 +161,10 @@ Peer tab:  displays GameState ← from host    → sends SerializedAction → to
 
 `SerializedAction` is a tagged union that maps 1-to-1 with exported `gameStore` action functions. The host-side `applyPeerAction` dispatcher routes each message to the corresponding local function. This means the host's action functions serve double duty: they are called directly for local/bot actions and re-called when serialized peer actions arrive.
 
+**Versioned snapshots and heartbeat**: `state`, `pendingDecision`, and `lobby` messages carry a per-type monotonic version stamped by the host (`client/protocol.ts`). Peers apply a message only if its version is newer than the last applied for that type. While a game is active, the host rebroadcasts its current snapshots every 3 seconds at their *current* versions — peers that already have them drop the duplicates, and a peer that missed a broadcast (connection blip; the transport drops sends silently when a link is down) self-heals within one heartbeat instead of freezing. The same resend happens immediately when a peer connects.
+
+**Transport abstraction**: `HostNetwork`/`PeerNetwork` (message layer, `client/network.ts`) sit on a byte-level `Transport` interface (`client/transport.ts`). Production injects a p2pcf-backed transport (`client/p2pcfTransport.ts`, loaded via dynamic import so Node tests never touch p2pcf's browser-only dependencies); tests inject `InMemoryRoom`/`InMemoryTransport` (`client/testing/inMemoryTransport.ts`), which reproduce the silent-drop failure semantics with injectable message loss and link up/down control.
+
 **Privacy during high-low-bet**: in the `high-low-bet` phase, each peer receives a sanitized copy of the state with all other players' `betChoice` fields nulled out. The reveal happens when all choices are recorded and the state transitions to `results`, at which point the full state is broadcast.
 
 **Bots in networked games**: bots run exclusively on the host tab. They are indistinguishable from human players in the game engine; the distinction lives only in `lobbyState.players[i].isBot`, which `initGame` uses to build the `botIds` set passed to `startBotRunner`.

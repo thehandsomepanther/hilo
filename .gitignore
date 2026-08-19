@@ -6,3 +6,4 @@ terraform/.terraform/
 terraform/.terraform.lock.hcl
 terraform/*.tfvars
 terraform/*.tfvars.json
+.DS_Store
