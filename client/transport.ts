@@ -13,6 +13,9 @@
  */
 
 export interface Transport {
+  /** This participant's own id in the mesh (HOST_CLIENT_ID for the host). */
+  readonly clientId: string;
+
   /** Fired when a remote peer's data channel opens. */
   onPeerConnect: ((peerId: string) => void) | null;
   /** Fired when a remote peer's data channel closes. */

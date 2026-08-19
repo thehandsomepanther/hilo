@@ -39,6 +39,8 @@ export async function fetchIceServers(workerUrl?: string): Promise<RTCIceServer[
 // ─── Transport implementation ────────────────────────────────────────────────
 
 class P2pcfTransport implements Transport {
+  readonly clientId: string;
+
   onPeerConnect: ((peerId: string) => void) | null = null;
   onPeerClose: ((peerId: string) => void) | null = null;
   onMessage: ((peerId: string, data: Uint8Array) => void) | null = null;
@@ -46,6 +48,7 @@ class P2pcfTransport implements Transport {
   private peers = new Map<string, P2PCFPeer>();
 
   constructor(private p2pcf: P2PCFType) {
+    this.clientId = p2pcf.clientId;
     this.p2pcf.on('peerconnect', (peer) => {
       this.peers.set(peer.client_id, peer);
       this.onPeerConnect?.(peer.client_id);

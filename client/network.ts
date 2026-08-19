@@ -14,11 +14,18 @@
  * State-bearing host messages (`state`, `pendingDecision`, `lobby`) carry a
  * per-type monotonic version `v` (see protocol.ts) so the host can safely
  * rebroadcast snapshots — peers drop stale/duplicate versions.
+ *
+ * In the other direction, actions are acked: PeerNetwork queues and retries
+ * until the host confirms, and HostNetwork drops duplicates before they reach
+ * the dispatcher.  Both sides of that live in protocol.ts.
  */
 
 import type { GameState, Player, MultiplicationDecision } from '../src/types';
 import type { BettingAction } from '../src/game';
 import type { Transport } from './transport';
+import {
+  OutboundActionQueue, InboundActionFilter, ACTION_RETRY_TICK_MS,
+} from './protocol';
 
 // ─── Lobby types ─────────────────────────────────────────────────────────────
 
@@ -42,7 +49,10 @@ export type HostMsg =
   | { type: 'pendingDecision'; v: number; payload: { player: Player } | null }
   | { type: 'lobby'; v: number; payload: LobbyState }
   | { type: 'slotAssignment'; payload: { playerIndex: number } }
-  | { type: 'proceedToSetup' };
+  | { type: 'proceedToSetup' }
+  // Confirms receipt of a peer action so the peer can stop retrying it.
+  // Consumed inside PeerNetwork; never surfaces to gameStore.
+  | { type: 'ack'; actionId: string };
 
 /**
  * All game actions a peer can invoke, serialised for network transport.
@@ -63,8 +73,21 @@ export type SerializedAction =
   | { name: 'submitMyBetChoice'; args: [string, 'high' | 'low' | 'swing'] }
   | { name: 'setPlayerReady'; args: [string] };
 
+/**
+ * An action on the wire, wrapped in a delivery envelope.
+ * `actionId` is `<clientId>:<counter>` (see protocol.ts) — it identifies the
+ * action for acks and lets the host reject duplicates from retries.
+ */
+export type ActionMsg = {
+  type: 'action';
+  actionId: string;
+  /** Seat the sender believes it occupies.  Carried, not yet verified. */
+  playerId: string | null;
+  payload: SerializedAction;
+};
+
 /** Messages sent from a peer to the host. */
-export type PeerMsg = { type: 'action'; payload: SerializedAction };
+export type PeerMsg = ActionMsg;
 
 // ─── Encoding helpers ─────────────────────────────────────────────────────────
 
@@ -107,9 +130,13 @@ export function generateClientId(): string {
 /**
  * Host-side network.  The host's transport client id is always
  * HOST_CLIENT_ID so peers can identify it unambiguously in the mesh.
+ *
+ * Peer actions are deduplicated and acked here, so `onMessage` fires exactly
+ * once per action no matter how many times the peer retries it.
  */
 export class HostNetwork {
   private peerIds = new Set<string>();
+  private inbound = new InboundActionFilter();
 
   onConnected: ((peerId: string) => void) | null = null;
   onMessage: ((peerId: string, msg: PeerMsg) => void) | null = null;
@@ -123,8 +150,27 @@ export class HostNetwork {
       this.peerIds.delete(peerId);
     };
     transport.onMessage = (peerId, data) => {
-      this.onMessage?.(peerId, decodeMsg<PeerMsg>(data));
+      this.receive(peerId, decodeMsg<PeerMsg>(data));
     };
+  }
+
+  private receive(peerId: string, msg: PeerMsg): void {
+    if (msg.type !== 'action') return;
+    switch (this.inbound.admit(peerId, msg.actionId)) {
+      case 'apply':
+        // Dispatch first, ack second: the ack means "applied", and a lost one
+        // costs only a redundant retry that the filter will call a duplicate.
+        this.onMessage?.(peerId, msg);
+        this.send(peerId, { type: 'ack', actionId: msg.actionId });
+        break;
+      case 'duplicate':
+        // Already applied — the peer just never heard about it.
+        this.send(peerId, { type: 'ack', actionId: msg.actionId });
+        break;
+      case 'gap':
+      case 'invalid':
+        break;
+    }
   }
 
   start(): void {
@@ -162,34 +208,64 @@ export class HostNetwork {
 /**
  * Peer-side network.  Ignores every mesh participant except the one whose
  * client id is HOST_CLIENT_ID.
+ *
+ * Actions are never dropped: `sendAction` queues, and the queue drains
+ * whenever the host link is up, retrying on a timer until each action is
+ * acked.  An action issued while disconnected therefore lands as soon as the
+ * connection returns instead of stalling the game forever.
  */
 export class PeerNetwork {
   private hostConnected = false;
+  private queue: OutboundActionQueue;
+  private retryTimer: ReturnType<typeof setInterval> | null = null;
 
   onConnected: (() => void) | null = null;
   onMessage: ((msg: HostMsg) => void) | null = null;
 
   constructor(private transport: Transport) {
+    this.queue = new OutboundActionQueue(transport.clientId);
     transport.onPeerConnect = (peerId) => {
-      if (peerId === HOST_CLIENT_ID) {
-        this.hostConnected = true;
-        this.onConnected?.();
-      }
+      if (peerId !== HOST_CLIENT_ID) return;
+      this.hostConnected = true;
+      this.onConnected?.();
+      // Anything queued while the link was down goes out immediately.
+      this.queue.resetBackoff();
+      this.flush();
     };
     transport.onPeerClose = (peerId) => {
       if (peerId === HOST_CLIENT_ID) this.hostConnected = false;
     };
     transport.onMessage = (peerId, data) => {
-      if (peerId === HOST_CLIENT_ID) this.onMessage?.(decodeMsg<HostMsg>(data));
+      if (peerId !== HOST_CLIENT_ID) return;
+      const msg = decodeMsg<HostMsg>(data);
+      // Acks are delivery bookkeeping — retire the action, tell no one.
+      if (msg.type === 'ack') { this.queue.ack(msg.actionId); return; }
+      this.onMessage?.(msg);
     };
   }
 
   start(): void {
     this.transport.start();
+    this.retryTimer ??= setInterval(() => this.flush(), ACTION_RETRY_TICK_MS);
   }
 
-  send(msg: PeerMsg): void {
-    if (this.hostConnected) this.transport.send(HOST_CLIENT_ID, encodeMsg(msg));
+  /** Queue an action for the host and try to send it right away. */
+  sendAction(payload: SerializedAction, playerId: string | null = null): string {
+    const { actionId } = this.queue.enqueue(payload, playerId);
+    this.flush();
+    return actionId;
+  }
+
+  private flush(): void {
+    if (!this.hostConnected) return;
+    for (const msg of this.queue.due(Date.now())) {
+      this.transport.send(HOST_CLIENT_ID, encodeMsg(msg));
+    }
+  }
+
+  /** Actions sent but not yet acked.  Nonzero means "the host hasn't heard us". */
+  pendingActionCount(): number {
+    return this.queue.size;
   }
 
   isConnected(): boolean {
@@ -201,6 +277,7 @@ export class PeerNetwork {
   }
 
   close(): void {
+    if (this.retryTimer !== null) { clearInterval(this.retryTimer); this.retryTimer = null; }
     this.transport.close();
     this.hostConnected = false;
   }

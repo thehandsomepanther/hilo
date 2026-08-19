@@ -94,7 +94,19 @@ Testing infrastructure: `client/transport.ts` (Transport interface),
 - Peers ignore any message with a version ≤ the last one applied. This makes
   missed broadcasts self-heal within one heartbeat and closes deadlock #2.
 
-### Phase 2 — Reliable, deduplicated actions
+### Phase 2 — Reliable, deduplicated actions ✅ IMPLEMENTED
+
+Implemented in `client/protocol.ts` (`OutboundActionQueue`, `InboundActionFilter`,
+`makeActionId`/`parseActionId`), `client/network.ts` (`ActionMsg` envelope, `ack`
+message, `PeerNetwork.sendAction` + retry timer, host-side admission), and
+`client/gameStore.ts` (`sendToHost` helper at every peer action site). Tests in
+`client/__tests__/protocol.test.ts`, `network.test.ts`, and
+`reliableActions.test.ts` (deadlock #1 end-to-end through the host's game logic).
+
+Retry backoff is per queue rather than per action, and each flush resends the
+whole queue oldest-first, so the host never has to buffer an out-of-order
+counter — anything it can't apply yet ('gap') is dropped and redelivered by the
+next retry.
 
 - Wrap `PeerMsg` actions in an envelope:
   `{ actionId: <clientId>:<counter>, playerId, payload }`.

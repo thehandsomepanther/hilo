@@ -20,7 +20,11 @@ client/        UI and orchestration layer
   main.ts          Svelte app entry point
   gameStore.ts     Central store: holds GameState, drives all transitions
   dealing.ts       Step machine for interactive dealing (× card decisions)
-  network.ts       WebRTC classes: HostNetwork, PeerNetwork, wire types
+  network.ts       Message layer: HostNetwork, PeerNetwork, wire types
+  protocol.ts      Delivery reliability: snapshot versioning, action queue/dedup
+  transport.ts     Byte-level Transport interface
+  p2pcfTransport.ts  Production Transport (WebRTC via p2pcf)
+  testing/         In-memory Transport with fault injection, for tests
   bots/
     botRunner.ts   Subscribes to game state; dispatches bot actions
     strategy.ts    Stateless decision functions for each game phase
@@ -161,7 +165,9 @@ Peer tab:  displays GameState ← from host    → sends SerializedAction → to
 
 `SerializedAction` is a tagged union that maps 1-to-1 with exported `gameStore` action functions. The host-side `applyPeerAction` dispatcher routes each message to the corresponding local function. This means the host's action functions serve double duty: they are called directly for local/bot actions and re-called when serialized peer actions arrive.
 
-**Versioned snapshots and heartbeat**: `state`, `pendingDecision`, and `lobby` messages carry a per-type monotonic version stamped by the host (`client/protocol.ts`). Peers apply a message only if its version is newer than the last applied for that type. While a game is active, the host rebroadcasts its current snapshots every 3 seconds at their *current* versions — peers that already have them drop the duplicates, and a peer that missed a broadcast (connection blip; the transport drops sends silently when a link is down) self-heals within one heartbeat instead of freezing. The same resend happens immediately when a peer connects.
+**Versioned snapshots and heartbeat** (host → peer): `state`, `pendingDecision`, and `lobby` messages carry a per-type monotonic version stamped by the host (`client/protocol.ts`). Peers apply a message only if its version is newer than the last applied for that type. While a game is active, the host rebroadcasts its current snapshots every 3 seconds at their *current* versions — peers that already have them drop the duplicates, and a peer that missed a broadcast (connection blip; the transport drops sends silently when a link is down) self-heals within one heartbeat instead of freezing. The same resend happens immediately when a peer connects.
+
+**Acked actions** (peer → host): each action goes out in an envelope carrying `actionId` (`<clientId>:<counter>`) and the sender's `playerId`, and stays in `PeerNetwork`'s `OutboundActionQueue` until the host acks it. Sends made while the link is down are queued rather than dropped, and unacked actions are retried with exponential backoff (500 ms → 4 s), the whole queue at once so the host never sees a counter gap. The host's `InboundActionFilter` admits each counter exactly once per sending connection: retries that arrive because an *ack* was lost are re-acked but not re-dispatched, which matters because a double-applied betting action would act as the next player. Acks are consumed inside `PeerNetwork` and never reach `gameStore`.
 
 **Transport abstraction**: `HostNetwork`/`PeerNetwork` (message layer, `client/network.ts`) sit on a byte-level `Transport` interface (`client/transport.ts`). Production injects a p2pcf-backed transport (`client/p2pcfTransport.ts`, loaded via dynamic import so Node tests never touch p2pcf's browser-only dependencies); tests inject `InMemoryRoom`/`InMemoryTransport` (`client/testing/inMemoryTransport.ts`), which reproduce the silent-drop failure semantics with injectable message loss and link up/down control.
 

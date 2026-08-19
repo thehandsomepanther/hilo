@@ -15,6 +15,8 @@
  *              Incoming peer actions are dispatched to the same local functions.
  * peer       — receives state from the host; local action functions forward
  *              arguments over the wire instead of running game logic directly.
+ *              Forwarded actions are queued until the host acks them, so an
+ *              action taken during a connection blip is never lost.
  */
 
 import { writable, get } from 'svelte/store';
@@ -100,6 +102,16 @@ let hostMsgGate = new VersionGate();
 
 /** Host side: rebroadcasts current snapshots every HEARTBEAT_INTERVAL_MS. */
 let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
+
+/**
+ * Peer side: forward an action to the host.  PeerNetwork queues it and retries
+ * until acked, so this never silently drops — an action taken during a
+ * connection blip lands when the link returns.  `playerId` rides along for
+ * host-side attribution.
+ */
+function sendToHost(payload: SerializedAction): void {
+  peerNet?.sendAction(payload, get(localPlayerId));
+}
 
 /**
  * During the high-low-bet phase, strip betChoice from every player except the
@@ -220,7 +232,7 @@ export function addBot(): void {
 
 export function updateLobbyName(index: number, name: string): void {
   if (get(networkMode) === 'peer') {
-    peerNet?.send({ type: 'action', payload: { name: 'updateLobbyName', args: [index, name] } });
+    sendToHost({ name: 'updateLobbyName', args: [index, name] });
     return;
   }
   lobbyState.update((s) => ({
@@ -233,7 +245,7 @@ export function updateLobbyName(index: number, name: string): void {
 
 export function initGame(playerNames: string[], startingChips: number, enforceTimeLimit: boolean): void {
   if (get(networkMode) === 'peer') {
-    peerNet?.send({ type: 'action', payload: { name: 'initGame', args: [playerNames, startingChips, enforceTimeLimit] } });
+    sendToHost({ name: 'initGame', args: [playerNames, startingChips, enforceTimeLimit] });
     return;
   }
   const s = createGame(playerNames, startingChips, 90, enforceTimeLimit);
@@ -255,7 +267,7 @@ export function initGame(playerNames: string[], startingChips: number, enforceTi
 
 export function doForcedBets(): void {
   if (get(networkMode) === 'peer') {
-    peerNet?.send({ type: 'action', payload: { name: 'doForcedBets' } });
+    sendToHost({ name: 'doForcedBets' });
     return;
   }
   gameState.update((s) => {
@@ -267,7 +279,7 @@ export function doForcedBets(): void {
 
 export function doDeal(phase: 1 | 2): void {
   if (get(networkMode) === 'peer') {
-    peerNet?.send({ type: 'action', payload: { name: 'doDeal', args: [phase] } });
+    sendToHost({ name: 'doDeal', args: [phase] });
     return;
   }
   const state = get(gameState);
@@ -289,7 +301,7 @@ export function doDeal(phase: 1 | 2): void {
 /** Called by the UI when the player submits their × card choice. */
 export function resolveDecision(decision: MultiplicationDecision): void {
   if (get(networkMode) === 'peer') {
-    peerNet?.send({ type: 'action', payload: { name: 'resolveDecision', args: [decision] } });
+    sendToHost({ name: 'resolveDecision', args: [decision] });
     return;
   }
   const current = get(pendingDecision);
@@ -300,7 +312,7 @@ export function resolveDecision(decision: MultiplicationDecision): void {
 
 export function doBettingAction(action: BettingAction): void {
   if (get(networkMode) === 'peer') {
-    peerNet?.send({ type: 'action', payload: { name: 'doBettingAction', args: [action] } });
+    sendToHost({ name: 'doBettingAction', args: [action] });
     return;
   }
   const state = get(gameState);
@@ -337,7 +349,7 @@ export function doBettingAction(action: BettingAction): void {
 
 export function submitEquation(playerId: string, target: 'low' | 'high', expression: string): string | null {
   if (get(networkMode) === 'peer') {
-    peerNet?.send({ type: 'action', payload: { name: 'submitEquation', args: [playerId, target, expression] } });
+    sendToHost({ name: 'submitEquation', args: [playerId, target, expression] });
     return null;
   }
   const state = get(gameState);
@@ -363,7 +375,7 @@ export function submitEquation(playerId: string, target: 'low' | 'high', express
 
 export function unsubmitEquation(playerId: string, target: 'low' | 'high'): void {
   if (get(networkMode) === 'peer') {
-    peerNet?.send({ type: 'action', payload: { name: 'unsubmitEquation', args: [playerId, target] } });
+    sendToHost({ name: 'unsubmitEquation', args: [playerId, target] });
     return;
   }
   const state = get(gameState);
@@ -384,7 +396,7 @@ export function unsubmitEquation(playerId: string, target: 'low' | 'high'): void
 
 export function setPlayerReady(playerId: string): void {
   if (get(networkMode) === 'peer') {
-    peerNet?.send({ type: 'action', payload: { name: 'setPlayerReady', args: [playerId] } });
+    sendToHost({ name: 'setPlayerReady', args: [playerId] });
     return;
   }
   gameState.update((s) => {
@@ -397,7 +409,7 @@ export function setPlayerReady(playerId: string): void {
 
 export function doAdvanceToBetting2(): void {
   if (get(networkMode) === 'peer') {
-    peerNet?.send({ type: 'action', payload: { name: 'doAdvanceToBetting2' } });
+    sendToHost({ name: 'doAdvanceToBetting2' });
     return;
   }
   const state = get(gameState);
@@ -466,7 +478,7 @@ export function submitMyBetChoice(choice: 'high' | 'low' | 'swing'): void {
   const pid = get(localPlayerId);
   if (!pid) return;
   if (get(networkMode) === 'peer') {
-    peerNet?.send({ type: 'action', payload: { name: 'submitMyBetChoice', args: [pid, choice] } });
+    sendToHost({ name: 'submitMyBetChoice', args: [pid, choice] });
     return;
   }
   const state = get(gameState);
@@ -477,7 +489,7 @@ export function submitMyBetChoice(choice: 'high' | 'low' | 'swing'): void {
 export function doSubmitBetChoices(choices: Map<string, DealtPlayer['betChoice']>): void {
   if (get(networkMode) === 'peer') {
     const obj = Object.fromEntries(choices) as Record<string, 'high' | 'low' | 'swing' | null>;
-    peerNet?.send({ type: 'action', payload: { name: 'doSubmitBetChoices', args: [obj] } });
+    sendToHost({ name: 'doSubmitBetChoices', args: [obj] });
     return;
   }
   const state = get(gameState);
@@ -495,7 +507,7 @@ export function doSubmitBetChoices(choices: Map<string, DealtPlayer['betChoice']
 
 export function doNextRound(): void {
   if (get(networkMode) === 'peer') {
-    peerNet?.send({ type: 'action', payload: { name: 'doNextRound' } });
+    sendToHost({ name: 'doNextRound' });
     return;
   }
   const state = get(gameState);
@@ -596,7 +608,7 @@ export async function setupAsPeer(roomId: string, workerUrl?: string, transport?
           pendingDecision.set({
             player: msg.payload.player,
             resolve: (d) => {
-              peerNet?.send({ type: 'action', payload: { name: 'resolveDecision', args: [d] } });
+              sendToHost({ name: 'resolveDecision', args: [d] });
             },
           });
         } else {

@@ -206,14 +206,10 @@ describe('peer state sync', () => {
     expect(get(myPlayerIndex)).toBe(1);
   });
 
-  it('forwards actions to the host, and silently drops them while disconnected', () => {
+  it('forwards actions to the host in a delivery envelope', () => {
     doForcedBets(); // networkMode is 'peer' → serialized and sent to the host
-    expect(hostReceived).toEqual([{ type: 'action', payload: { name: 'doForcedBets' } }]);
-
-    room.disconnectPeer(PEER_ID);
-    doForcedBets();
-    // Still just one message: the silent-drop gap that Phase 2 (acked actions)
-    // will close.  Phase 1 only guarantees host→peer healing.
-    expect(hostReceived).toHaveLength(1);
+    expect(hostReceived).toEqual([
+      { type: 'action', actionId: `${PEER_ID}:1`, playerId: null, payload: { name: 'doForcedBets' } },
+    ]);
   });
 });

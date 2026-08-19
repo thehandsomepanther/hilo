@@ -18,6 +18,8 @@ declare module 'p2pcf' {
 
   export default class P2PCF {
     constructor(clientId: string, roomId: string, options?: P2PCFOptions);
+    /** This client's own id in the mesh, as passed to the constructor. */
+    readonly clientId: string;
     start(): Promise<void>;
     destroy(): void;
     send(peer: P2PCFPeer, data: Uint8Array): void;
