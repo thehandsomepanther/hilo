@@ -35,6 +35,14 @@ client/        UI and orchestration layer
 
 ---
 
+## Table Size
+
+`MAX_PLAYERS` (`src/deck.ts`) is derived, not chosen: dealing consumes exactly **4 number cards per player per round** — 1 secret, 2 in phase 1, 1 in phase 2 — so the deck's 44 number cards seat exactly 11. The phase-1 count holds whatever the symbols do, because a `√` or an accepted `×` eats both of that player's draw slots and pays back a bonus plus a forced extra number.
+
+There is no slack at the cap, so the limit is enforced at three points: `createGame` throws, the lobby's add buttons disable, and the host answers a `hello` beyond the cap with `rejected: 'room-full'`. Without them, dealing throws part-way through and leaves the game half-dealt.
+
+---
+
 ## Core Principle: Pure Engine, Thin Orchestrator
 
 `src/` contains zero side effects. Every function in `game.ts` and `results.ts` takes a state value and returns a new state value — no mutation, no stores, no promises. The engine can be unit-tested in Node without a browser.
@@ -190,7 +198,9 @@ Peer tab:  displays GameState ← from host    → sends SerializedAction → to
 
 Bots run on the host tab (or in standalone mode) via `client/bots/botRunner.ts`, which subscribes to `gameState` and `pendingDecision` and dispatches actions on behalf of bot player IDs.
 
-**Scheduling**: bot actions are delayed by a random 700–1100 ms interval to feel natural. The `scheduleOnce(key, delay, fn)` helper prevents the same action from being scheduled twice. Keys encode round + phase + enough context (e.g. `activePlayerIndex` for betting) to be unique per action slot.
+**Scheduling**: bot actions are delayed by a random 700–1100 ms interval to feel natural. The `scheduleOnce(key, delay, fn)` helper prevents the same action from being scheduled twice. Keys must identify an *action slot*, not a seat — betting keys include `bettingActionsThisRound` because a raise re-opens the betting and asks the same seat to act again, and a seat-only key would swallow every turn after the first.
+
+**Readiness**: bots call `setPlayerReady` themselves once both equations are in. The Ready button only renders for the seat a client controls, so in a networked game nobody else can press it for them, and the host's "Proceed to Betting Phase 2" waits on every active player being ready.
 
 **At fire time, state is re-read**: the timeout callback calls `get(gameState)` fresh rather than relying on the state that was current when the timeout was scheduled. This handles the case where the state has already advanced (e.g. another player acted first).
 

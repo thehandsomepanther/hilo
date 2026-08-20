@@ -43,6 +43,8 @@ import type { SerializedAction, LobbyState, JoinRejection } from './network';
 import type { Transport } from './transport';
 import { VersionCounter, VersionGate, HEARTBEAT_INTERVAL_MS } from './protocol';
 import { seatToken, seatName, rememberSeatName } from './identity';
+import { MAX_PLAYERS } from '../src/deck';
+export { MAX_PLAYERS, MIN_PLAYERS } from '../src/deck';
 export { generateRoomId } from './network';
 import { startBotRunner } from './bots/botRunner';
 
@@ -386,6 +388,12 @@ function handleHello(peerId: string, token: string, name: string): void {
       hostNet.send(peerId, { type: 'rejected', reason: 'game-in-progress' });
       return;
     }
+    if (get(lobbyState).players.length >= MAX_PLAYERS) {
+      // The deck cannot seat another player; better to say so than to hand out
+      // a seat that makes the deal throw.
+      hostNet.send(peerId, { type: 'rejected', reason: 'room-full' });
+      return;
+    }
     lobbyState.update((ls) => ({ ...ls, players: [...ls.players, { name, isBot: false }] }));
     seat = get(lobbyState).players.length - 1;
     seatTokens.set(token, seat);
@@ -440,8 +448,13 @@ function runDealStep<Final extends GameState>(step: DealStep<Final>): void {
 // ─── Lobby actions ────────────────────────────────────────────────────────────
 
 export function addPlayer(): void {
-  lobbyState.update((s) => ({ ...s, players: [...s.players, { name: '', isBot: false }] }));
+  lobbyState.update((s) => (
+    s.players.length >= MAX_PLAYERS ? s : { ...s, players: [...s.players, { name: '', isBot: false }] }
+  ));
 }
+
+/** True when the lobby has no room for another seat (see MAX_PLAYERS). */
+export const lobbyFull = derived(lobbyState, (s) => s.players.length >= MAX_PLAYERS);
 
 export function removePlayer(index: number): void {
   lobbyState.update((s) => ({ ...s, players: s.players.filter((_, i) => i !== index) }));
@@ -490,6 +503,7 @@ export function updateEnforceTimeLimit(enforce: boolean): void {
 
 export function addBot(): void {
   lobbyState.update((s) => {
+    if (s.players.length >= MAX_PLAYERS) return s;
     const botCount = s.players.filter((p) => p.isBot).length;
     return { ...s, players: [...s.players, { name: `Bot ${botCount + 1}`, isBot: true }] };
   });

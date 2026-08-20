@@ -1,4 +1,6 @@
-import { buildDeck, buildPersonalOperators, shuffle, drawNumberCard } from './deck';
+import {
+  buildDeck, buildPersonalOperators, shuffle, drawNumberCard, MAX_PLAYERS, MIN_PLAYERS,
+} from './deck';
 import {
   GameState, Player, DealtPlayer, UndealPlayer,
   MultiplicationDecision, Card, RoundResult,
@@ -16,7 +18,10 @@ export function createGame(
   calculationTimeLimit = 90,
   enforceTimeLimit = false,
 ): SetupState {
-  if (playerNames.length < 2) throw new Error('At least 2 players required');
+  if (playerNames.length < MIN_PLAYERS) throw new Error(`At least ${MIN_PLAYERS} players required`);
+  // Beyond this the deck runs dry mid-deal.  Fail here, where nothing has been
+  // built yet, rather than throwing halfway through dealing.
+  if (playerNames.length > MAX_PLAYERS) throw new Error(`At most ${MAX_PLAYERS} players supported`);
 
   const players: UndealPlayer[] = playerNames.map((name, i) => ({
     id: `player-${i}`,

@@ -13,7 +13,7 @@ import {
   seatOnline, myPlayerIndex, networkMode,
   setupAsHost, setupAsPeer, hostProceed, addBot, removePlayer, doForcedBets, noteConnectivityChange,
   _resetNetworkForTests,
-  HOST_SILENCE_TIMEOUT_MS,
+  HOST_SILENCE_TIMEOUT_MS, MAX_PLAYERS,
 } from '../gameStore';
 import type { HostMsg } from '../network';
 import { HEARTBEAT_INTERVAL_MS } from '../protocol';
@@ -112,6 +112,24 @@ describe('host seat assignment', () => {
     ]);
     expect(lobbyNames()).toEqual(['', 'Ada']); // lobby untouched
     expect(get(connectedSeats)).toEqual([0, 1]);
+  });
+
+  it('turns away a player the deck cannot seat', () => {
+    // Fill the table with bots, leaving the host's own seat: MAX_PLAYERS total.
+    for (let i = 0; i < MAX_PLAYERS - 1; i++) addBot();
+    expect(lobbyNames()).toHaveLength(MAX_PLAYERS);
+
+    const received = join('p1', 'token-latecomer', 'Late');
+
+    expect(received.some((m) => m.type === 'rejected' && m.reason === 'room-full')).toBe(true);
+    expect(lobbyNames()).toHaveLength(MAX_PLAYERS); // no over-full seat handed out
+  });
+
+  it('seats a player who arrives with one place left', () => {
+    for (let i = 0; i < MAX_PLAYERS - 2; i++) addBot();
+    const received = join('p1', 'token-ada', 'Ada');
+    expect(slotOf(received)).toBe(MAX_PLAYERS - 1);
+    expect(lobbyNames()).toHaveLength(MAX_PLAYERS);
   });
 
   it('keeps a returning player after a link blip without a fresh hello', () => {

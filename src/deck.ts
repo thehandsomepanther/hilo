@@ -3,6 +3,31 @@ import { Card, NumberCard, OperatorCard, Suit } from './types';
 const SUITS: Suit[] = ['Gold', 'Silver', 'Bronze', 'Black'];
 const NUMBER_VALUES = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10] as const;
 
+/** Number cards in the deck — the resource that limits table size. */
+const NUMBER_CARD_COUNT = SUITS.length * NUMBER_VALUES.length;
+
+/**
+ * Number cards a single player consumes in one round, which is a fixed 4 no
+ * matter how the deal goes: 1 secret, 2 in dealing phase 1, 1 in phase 2.
+ *
+ * Phase 1 is 2 regardless of symbols because a √ or accepted × eats both of
+ * that player's draw slots and pays out a bonus number plus a forced extra;
+ * a declined × pays a bonus number and sends the player to the second pass.
+ * Operator cards drawn along the way are discarded without costing numbers.
+ */
+const NUMBER_CARDS_PER_PLAYER = 4;
+
+/**
+ * Most players one deck can seat.  Past this, dealing runs the deck dry and
+ * `drawCard`/`drawNumberCard` throw part-way through a deal, which would leave
+ * the game in a broken half-dealt state.  There is no slack: 11 players use
+ * every one of the 44 number cards.
+ */
+export const MAX_PLAYERS = Math.floor(NUMBER_CARD_COUNT / NUMBER_CARDS_PER_PLAYER);
+
+/** Fewest players a game can start with. */
+export const MIN_PLAYERS = 2;
+
 /** Build the 52-card main deck (44 number cards + 4× + 4√). */
 export function buildDeck(): Card[] {
   const cards: Card[] = [];

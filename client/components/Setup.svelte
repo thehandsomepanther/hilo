@@ -1,6 +1,6 @@
 <script lang="ts">
   import {
-    lobbyState, myPlayerIndex, networkMode, seatOnline,
+    lobbyState, myPlayerIndex, networkMode, seatOnline, lobbyFull, MAX_PLAYERS,
     addPlayer, removePlayer, updateLobbyName, updateStartingChips, updateEnforceTimeLimit,
     initGame, addBot,
   } from '../gameStore';
@@ -33,6 +33,10 @@
     }
     if (names.length < 2) {
       error = 'At least 2 players are required.';
+      return;
+    }
+    if (names.length > MAX_PLAYERS) {
+      error = `At most ${MAX_PLAYERS} players are supported — the deck runs out of number cards beyond that.`;
       return;
     }
     error = '';
@@ -97,11 +101,15 @@
     {/each}
 
     {#if isStandalone}
-      <button type="button" onclick={addPlayer}>+ Add player</button>
-      <button type="button" onclick={addBot}>+ Add bot</button>
+      <button type="button" onclick={addPlayer} disabled={$lobbyFull}>+ Add player</button>
+      <button type="button" onclick={addBot} disabled={$lobbyFull}>+ Add bot</button>
     {:else if isHost}
-      <button type="button" onclick={addBot}>+ Add bot</button>
+      <button type="button" onclick={addBot} disabled={$lobbyFull}>+ Add bot</button>
       <p><em>Human players join by connecting via the network lobby.</em></p>
+    {/if}
+
+    {#if $lobbyFull}
+      <p><em>Table is full — one deck seats {MAX_PLAYERS} players.</em></p>
     {/if}
   </fieldset>
 

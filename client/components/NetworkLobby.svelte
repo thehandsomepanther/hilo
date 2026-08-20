@@ -1,7 +1,7 @@
 <script lang="ts">
   import {
     setupAsHost, setupAsPeer, generateRoomId, hostProceed,
-    lobbyState, myPlayerIndex, lobbyProceed, joinRejected,
+    lobbyState, myPlayerIndex, lobbyProceed, joinRejected, MAX_PLAYERS,
   } from '../gameStore';
 
   type Props = { oncomplete: () => void };
@@ -62,12 +62,14 @@
   // Auto-advance when the host broadcasts proceedToSetup.
   $effect(() => { if ($lobbyProceed) oncomplete(); });
 
-  // The host can refuse a seat — most often because the game already started.
+  // The host can refuse a seat — the game has started, or the table is full.
   $effect(() => {
     if ($joinRejected === null) return;
     peerJoined = false;
-    peerError = 'That game is already in progress, so no new players can join. '
-      + 'Ask the host to finish the round and start a new game.';
+    peerError = $joinRejected === 'room-full'
+      ? `That game is full — one deck seats ${MAX_PLAYERS} players.`
+      : 'That game is already in progress, so no new players can join. '
+        + 'Ask the host to finish the round and start a new game.';
   });
 
   /**

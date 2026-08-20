@@ -60,7 +60,7 @@ export type HostMsg =
   | { type: 'rejected'; reason: JoinRejection };
 
 /** Why a host turned a connection away.  Peers map these to user-facing copy. */
-export type JoinRejection = 'game-in-progress';
+export type JoinRejection = 'game-in-progress' | 'room-full';
 
 /**
  * All game actions a peer can invoke, serialised for network transport.
