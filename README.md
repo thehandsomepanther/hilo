@@ -79,19 +79,81 @@ The game ends when only one player has chips remaining.
 
 ## Multiplayer
 
-The game supports two modes:
+Up to **11 players** — the deck holds 44 number cards and each player uses exactly 4 per round.
 
 ### Local (pass-and-play)
-Select "Local" at the lobby screen. All players share the same browser window and take turns.
 
-### Networked (WebRTC, no server required)
-One player hosts; others join by exchanging connection blobs manually (copy/paste or out-of-band sharing). No signaling server is involved — connection data is base-64 encoded SDP/ICE and can be sent over any channel (text, QR code, etc.).
+Choose "Play without networking" at the lobby screen. All players share one browser window and take turns. You can add bots here too.
 
-To start a networked game:
-1. Host selects "Host" and shares the generated offer blob with each joining player
-2. Each peer pastes the offer, generates an answer blob, and sends it back to the host
-3. The host applies each answer — once connected, the game begins
-4. Only the host can advance phases; peers' actions are sent to the host and applied there
+### Networked
+
+One player hosts and gets a six-character room code plus an invite link; everyone else joins with either. Gameplay runs over WebRTC data channels directly between browsers — a Cloudflare Worker is used only to help peers find each other, and no card, bet, or game state ever passes through it.
+
+The host tab is authoritative: it runs the game engine and broadcasts state, while peers forward their actions to it. That means **the host must stay open** for the game to continue.
+
+The connection is designed to survive interruptions. Missed updates are re-sent on a heartbeat, actions taken while offline are queued and delivered on reconnect, and refreshing a tab rejoins the same room and reclaims the same seat, chips and cards.
+
+---
+
+## Self-hosting the signalling worker
+
+By default the app uses [p2pcf](https://github.com/gfodor/p2pcf)'s shared public signalling worker and **no TURN relay**, which is usually fine on home wifi but often fails on mobile networks, where carrier-grade NAT blocks direct peer-to-peer connections. Running your own worker gives you private signalling and optional TURN. Cloudflare's free tier is ample: a four-player game mid-round makes roughly 320 requests an hour, against a free limit of 100,000 a day.
+
+The worker does two things, neither involving gameplay:
+
+- **Room rendezvous** — peers post and read each other's connection details. This needs an R2 bucket for scratch storage.
+- **`GET /turn-creds`** — hands out TURN relay credentials. Optional; returns an empty list if unconfigured, and clients then fall back to STUN only.
+
+### Option A — Terraform
+
+Provisions the worker, the R2 bucket, and a Pages project for the site itself. You need a Cloudflare account and an API token with Workers, Pages, and R2 permissions.
+
+```bash
+cd terraform
+cat > terraform.tfvars <<'EOF'
+cloudflare_api_token  = "your-api-token"
+cloudflare_account_id = "your-account-id"
+workers_subdomain     = "your-subdomain"   # Workers & Pages → your subdomain
+allowed_origins       = "https://your-site.example"
+metered_username      = ""                 # optional, see TURN below
+metered_credential    = ""                 # optional
+EOF
+
+terraform init
+terraform apply
+terraform output worker_url
+```
+
+`terraform.tfvars` and the state files are gitignored — they hold your credentials, so keep it that way.
+
+### Option B — Wrangler only
+
+Deploys just the worker and its bucket.
+
+```bash
+npx wrangler r2 bucket create hilo-signaling
+# In wrangler.toml, set `name` and `account_id` to your own.
+npx wrangler deploy
+
+# Optional, to enable TURN:
+npx wrangler secret put METERED_USERNAME
+npx wrangler secret put METERED_CREDENTIAL
+```
+
+### Pointing the game at it
+
+In the lobby, open **Advanced** and paste the worker URL into "Custom worker URL" *before* clicking Host or Join. It is remembered in your browser, and the invite link carries it, so anyone joining through that link picks it up automatically.
+
+Anyone typing the room code by hand must enter the same worker URL — two players on different workers are looking in different places and will never find each other.
+
+### TURN relay
+
+Without `METERED_USERNAME`/`METERED_CREDENTIAL`, `/turn-creds` returns an empty list and clients use STUN only. Direct connections then work on most home networks but frequently fail on cellular. [Metered.ca](https://www.metered.ca/) has a free tier and is what the worker is wired up for out of the box; any TURN provider works if you edit `handleTurnCreds` in `worker.js`.
+
+### Keeping it to yourself
+
+- `ALLOWED_ORIGINS` — comma-separated list of sites permitted to use the worker. Set it without `ORIGIN_QUOTA` and every other origin is refused outright.
+- `ORIGIN_QUOTA` — monthly join budget per origin (default 10,000) for origins not on the list.
 
 ---
 
