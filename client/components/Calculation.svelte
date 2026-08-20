@@ -114,51 +114,6 @@
     eq.submitted = err === null;
   }
 
-  // ─── Debug: auto-fill equations ──────────────────────────────────────────
-
-  function buildDebugExpression(tokens: Card[]): string {
-    const nums   = tokens.filter((t): t is Card & { kind: 'number' }   => t.kind === 'number');
-    const roots  = tokens.filter((t): t is Card & { kind: 'operator'; operator: '√' } =>
-      t.kind === 'operator' && t.operator === '√');
-    const binOps = tokens.filter((t): t is Card & { kind: 'operator' } =>
-      t.kind === 'operator' && t.operator !== '√');
-
-    const numberQueue = [...nums];
-    const atoms: string[] = [];
-    for (const _ of roots) {
-      const n = numberQueue.shift();
-      atoms.push(n ? `√ ${n.value}` : '√ 1');
-    }
-    for (const n of numberQueue) atoms.push(String(n.value));
-
-    const ops = binOps.map((o) => o.operator);
-    const parts: string[] = [atoms[0] ?? '1'];
-    for (let i = 0; i < ops.length; i++) {
-      const op  = ops[i];
-      const rhs = atoms[i + 1] ?? '1';
-      if (op === '÷' && rhs === '0') {
-        const prev = parts.pop()!;
-        parts.push(rhs, op, prev);
-      } else {
-        parts.push(op, rhs);
-      }
-    }
-    return parts.join(' ');
-  }
-
-  function debugFillAll(): void {
-    for (const player of calcPlayers) {
-      if (player.folded) continue;
-      const tokens = getTokens(player);
-      const expr = buildDebugExpression(tokens);
-      for (const target of ['low', 'high'] as const) {
-        const err = submitEquation(player.id, target, expr);
-        const eq = playerStates[player.id]?.[target];
-        if (eq) { eq.error = err; eq.submitted = err === null; }
-      }
-    }
-  }
-
   // ─── Timer ────────────────────────────────────────────────────────────────
 
   let remaining = $state(($gameState?.phase === 'calculation' ? $gameState.calculationTimeLimit : null) ?? 90);
@@ -318,9 +273,6 @@
       disabled={!allReady}
     >
       Proceed to Betting Phase 2
-    </button>
-    <button type="button" onclick={debugFillAll} style="opacity:0.6;margin-left:1rem">
-      Debug: auto-fill all equations
     </button>
   {:else}
     <p><em>Waiting for the host to advance to the next phase…</em></p>
