@@ -660,7 +660,15 @@ export function unsubmitEquation(playerId: string, target: 'low' | 'high'): void
   const highEq = target === 'high' ? null : player.highEquation;
 
   const updated = recordEquationResults(calcState, playerId, low, high, lowEq, highEq);
-  gameState.set(appendLog(updated, `${player.name} retracted their ${target} equation`));
+  // Retracting withdraws readiness.  Otherwise a player who edits a submitted
+  // equation stays ready, the host can advance the phase while they are still
+  // mid-edit, and they reach results with a missing equation — which forfeits
+  // that half of the pot.
+  const withdrawn: CalculationState = {
+    ...updated,
+    readyPlayerIds: updated.readyPlayerIds.filter((id) => id !== playerId),
+  };
+  gameState.set(appendLog(withdrawn, `${player.name} retracted their ${target} equation`));
 }
 
 export function setPlayerReady(playerId: string): void {
@@ -672,6 +680,11 @@ export function setPlayerReady(playerId: string): void {
     if (!s || s.phase !== 'calculation') return s;
     const cs = s as CalculationState;
     if (cs.readyPlayerIds.includes(playerId)) return s;
+    // "Ready" asserts both equations are locked in — it can't outlive them.
+    // The UI disables the button, but a late-arriving peer message could still
+    // land after a retract, and the host is the one that has to be sure.
+    const player = cs.players.find((p) => p.id === playerId);
+    if (!player || player.lowEquation === null || player.highEquation === null) return s;
     return { ...cs, readyPlayerIds: [...cs.readyPlayerIds, playerId] };
   });
 }
