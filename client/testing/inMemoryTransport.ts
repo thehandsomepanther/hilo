@@ -39,6 +39,12 @@ export class InMemoryTransport implements Transport {
     this.pollingMode = mode;
   }
 
+  /** There is no signalling to re-announce to; tests just count the calls. */
+  wakeCount = 0;
+  wake(): void {
+    this.wakeCount++;
+  }
+
   close(): void {
     this.room.removeParticipant(this.clientId);
   }

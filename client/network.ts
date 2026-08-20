@@ -231,6 +231,11 @@ export class HostNetwork {
     this.transport.setPollingMode(mode);
   }
 
+  /** Re-announce now — connectivity may have changed under us. */
+  wake(): void {
+    this.transport.wake();
+  }
+
   close(): void {
     this.transport.close();
     this.peerIds.clear();
@@ -329,6 +334,13 @@ export class PeerNetwork {
 
   setPollingMode(mode: PollingMode): void {
     this.transport.setPollingMode(mode);
+  }
+
+  /** Re-announce now, and flush anything the queue is holding. */
+  wake(): void {
+    this.transport.wake();
+    this.queue.resetBackoff();
+    this.flush();
   }
 
   close(): void {

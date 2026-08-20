@@ -43,5 +43,10 @@ export interface Transport {
   broadcast(data: Uint8Array): void;
   /** Set the signalling poll rate (no-op for transports without polling). */
   setPollingMode(mode: PollingMode): void;
+  /**
+   * The environment suggests connectivity just changed — re-announce and poll
+   * now rather than waiting out the current interval.  Safe to call often.
+   */
+  wake(): void;
   close(): void;
 }

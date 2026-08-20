@@ -299,6 +299,43 @@ function updatePeerPolling(): void {
   peerNet.setPollingMode(pastLobby && linkUp ? 'idle' : 'active');
 }
 
+// ─── Connectivity changes ────────────────────────────────────────────────────
+
+/**
+ * Something happened that could have changed our address or interrupted us:
+ * the network came back, or a backgrounded tab was foregrounded (its timers
+ * throttled to a crawl while it was away, so everything below is overdue).
+ *
+ * Re-announce immediately rather than waiting out an idle interval — on a
+ * phone switching from wifi to cellular, that wait is most of the time spent
+ * staring at "reconnecting".  Exported because the browser listeners are not
+ * the only sensible caller: a manual "retry" control would do exactly this.
+ */
+export function noteConnectivityChange(): void {
+  // A hidden tab is going away, not coming back; nothing to re-announce yet.
+  if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
+  updateHostPolling();
+  updatePeerPolling();
+  hostNet?.wake();
+  peerNet?.wake();
+}
+
+let connectivityListening = false;
+
+function listenForConnectivityChanges(): void {
+  if (connectivityListening || typeof window === 'undefined') return;
+  window.addEventListener('online', noteConnectivityChange);
+  document.addEventListener('visibilitychange', noteConnectivityChange);
+  connectivityListening = true;
+}
+
+function stopListeningForConnectivityChanges(): void {
+  if (!connectivityListening || typeof window === 'undefined') return;
+  window.removeEventListener('online', noteConnectivityChange);
+  document.removeEventListener('visibilitychange', noteConnectivityChange);
+  connectivityListening = false;
+}
+
 /**
  * Bring one peer up to date: its seat number, then every current snapshot at
  * its CURRENT version.  Used both for a first join and for every reconnect —
@@ -810,6 +847,7 @@ export async function setupAsHost(roomId: string, workerUrl?: string, transport?
 
   hostNet.start();
   heartbeatTimer = setInterval(heartbeat, HEARTBEAT_INTERVAL_MS);
+  listenForConnectivityChanges();
 }
 
 export async function setupAsPeer(roomId: string, workerUrl?: string, transport?: Transport): Promise<void> {
@@ -878,6 +916,7 @@ export async function setupAsPeer(roomId: string, workerUrl?: string, transport?
   // flaky connect and always reaches the host before our first action.
   peerNet.sendHello(seatToken(roomId), seatName(roomId));
   watchdogTimer = setInterval(hostSilenceWatchdog, HOST_WATCHDOG_TICK_MS);
+  listenForConnectivityChanges();
 }
 
 /** Host calls this when clicking "Done" — signals all peers to advance past the lobby. */
@@ -898,6 +937,7 @@ export function getConnectedPeerIds(): string[] {
 export function _resetNetworkForTests(): void {
   if (heartbeatTimer !== null) { clearInterval(heartbeatTimer); heartbeatTimer = null; }
   if (watchdogTimer !== null) { clearInterval(watchdogTimer); watchdogTimer = null; }
+  stopListeningForConnectivityChanges();
   hostNet?.close();
   peerNet?.close();
   hostNet = null;

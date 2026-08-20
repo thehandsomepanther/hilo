@@ -36,5 +36,7 @@ declare module 'p2pcf' {
     idlePollingAfterMs: number;
     /** @internal — poll interval once idle. */
     idlePollingRateMs: number;
+    /** @internal — when our peer info was last posted; null forces a re-post. */
+    dataTimestamp: number | null;
   }
 }

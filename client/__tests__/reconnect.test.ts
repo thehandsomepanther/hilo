@@ -11,7 +11,8 @@ import { get } from 'svelte/store';
 import {
   gameState, lobbyState, connectedSeats, hostLinkUp, joinRejected, queuedActionCount,
   seatOnline, myPlayerIndex, networkMode,
-  setupAsHost, setupAsPeer, hostProceed, addBot, removePlayer, doForcedBets, _resetNetworkForTests,
+  setupAsHost, setupAsPeer, hostProceed, addBot, removePlayer, doForcedBets, noteConnectivityChange,
+  _resetNetworkForTests,
   HOST_SILENCE_TIMEOUT_MS,
 } from '../gameStore';
 import type { HostMsg } from '../network';
@@ -246,6 +247,85 @@ describe('signalling polling mode', () => {
 
     room.connectPeer('p2');
     expect(hostMode()).toBe('idle');
+  });
+});
+
+// ─── Connectivity changes ────────────────────────────────────────────────────
+//
+// On a phone, the expensive part of a wifi → cellular switch is the waiting:
+// ICE has to fail, then the room has to be re-polled.  A connectivity hint
+// (`online`, or a tab being foregrounded after its timers were throttled)
+// short-circuits the second half.
+
+describe('connectivity change hints', () => {
+  let room: InMemoryRoom;
+
+  beforeEach(async () => {
+    room = new InMemoryRoom();
+    await setupAsHost('TESTROOM', undefined, room.hostTransport);
+    room.addPeer('p1');
+    room.connectPeer('p1');
+    sayHello(room.peerTransport('p1'), 'token-ada', 'Ada');
+  });
+
+  it('re-announces immediately instead of waiting out the idle interval', () => {
+    hostProceed();
+    expect(room.hostTransport.pollingMode).toBe('idle');
+    const before = room.hostTransport.wakeCount;
+
+    noteConnectivityChange();
+    expect(room.hostTransport.wakeCount).toBe(before + 1);
+  });
+
+  it('re-derives the polling mode, so a missing player restores discovery', () => {
+    hostProceed();
+    room.disconnectPeer('p1');
+    // Force the wrong mode, as if a stale decision had left us idling.
+    room.hostTransport.setPollingMode('idle');
+
+    noteConnectivityChange();
+    expect(room.hostTransport.pollingMode).toBe('active');
+  });
+
+  it('does nothing while the tab is hidden — it is leaving, not returning', () => {
+    const before = room.hostTransport.wakeCount;
+    const doc = globalThis.document;
+    (globalThis as { document?: unknown }).document = { visibilityState: 'hidden' };
+    try {
+      noteConnectivityChange();
+      expect(room.hostTransport.wakeCount).toBe(before);
+    } finally {
+      if (doc === undefined) delete (globalThis as { document?: unknown }).document;
+      else (globalThis as { document?: unknown }).document = doc;
+    }
+  });
+});
+
+describe('peer connectivity changes', () => {
+  const PEER_ID = 'PEERAAAA';
+  let room: InMemoryRoom;
+  let transport: InMemoryTransport;
+
+  beforeEach(async () => {
+    room = new InMemoryRoom();
+    transport = room.addPeer(PEER_ID);
+    await setupAsPeer('TESTROOM', undefined, transport);
+    room.connectPeer(PEER_ID);
+  });
+
+  it('flushes anything the queue is holding when connectivity returns', () => {
+    const delivered: unknown[] = [];
+    room.hostTransport.onMessage = (_from, data) => { delivered.push(data); };
+
+    room.disconnectPeer(PEER_ID);
+    doForcedBets();                 // queued while offline
+    room.connectPeer(PEER_ID);      // link back up
+    delivered.length = 0;
+
+    // A wake retries the queue immediately rather than on the backoff clock.
+    noteConnectivityChange();
+    expect(transport.wakeCount).toBeGreaterThan(0);
+    expect(delivered.length).toBeGreaterThan(0);
   });
 });
 

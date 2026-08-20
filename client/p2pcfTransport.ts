@@ -90,6 +90,21 @@ class P2pcfTransport implements Transport {
    * recovers a dropped connection, and p2pcf grants itself 10s of fast polling
    * automatically whenever the peer set changes.
    */
+  /**
+   * Re-announce presence and poll immediately.  Called when the browser says
+   * connectivity may have changed (came back online, tab foregrounded).
+   *
+   * Clearing `dataTimestamp` is what p2pcf's own network watcher does when it
+   * notices a changed address — it forces our peer info to be re-posted, so
+   * others can find us at whatever address we now have.  Doing it here means we
+   * don't sit out the idle interval (or the watcher's own cadence) before the
+   * room hears from us.
+   */
+  wake(): void {
+    this.p2pcf.dataTimestamp = null;
+    this.p2pcf.nextStepTime = Math.min(this.p2pcf.nextStepTime, Date.now());
+  }
+
   setPollingMode(mode: PollingMode): void {
     const now = Date.now();
     if (mode === 'idle') {
@@ -127,7 +142,11 @@ export async function createP2pcfTransport(
     turnIceServers: iceServers,
     fastPollingRateMs: 2000,
     slowPollingRateMs: 8000,
-    networkChangePollIntervalMs: 30000,
+    // How often p2pcf re-checks its own reflexive address, which is how a
+    // network switch (wifi → cellular) gets noticed at all.  This is a local
+    // STUN probe, not a Worker request, so a tight cadence costs nothing on
+    // Cloudflare — and halving the detection delay is worth a lot on mobile.
+    networkChangePollIntervalMs: 15000,
   });
   return new P2pcfTransport(p2pcf);
 }

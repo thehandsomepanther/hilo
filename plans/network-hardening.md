@@ -142,6 +142,32 @@ Also needed for reload recovery to actually work: `NetworkLobby` now keeps
 `?room=` in the address bar instead of clearing it, so refreshing a peer tab
 rejoins the room rather than returning to the front page.
 
+Follow-up (mobile): `noteConnectivityChange()` re-announces on `online` /
+`visibilitychange`, and p2pcf's address re-check is back to 15s (a local STUN
+probe, so it costs no Worker quota). This cuts the wait after a wifi → cellular
+switch, which is otherwise dominated by idle polling.
+
+### Known mobile gaps (reviewed, not yet addressed)
+
+- **iOS Safari destroys the connection when the tab is backgrounded.** p2pcf
+  binds `pagehide → destroy()`, which clears its step loop; nothing here rebuilds
+  a destroyed transport, so `peerclose` fires and the UI promises a reconnect
+  that can never happen. Only a manual refresh recovers (which does work). The
+  fix is a real `reconnect()` that tears down `peerNet` and re-runs
+  `setupAsPeer` with the same seat token.
+- **No TURN unless the host configures a worker URL.** Deliberate: a baked-in
+  default would point every deployment at one person's Cloudflare account. Users
+  self-hosting a worker (free tier) get TURN; everyone else is STUN-only, which
+  often fails on carrier-grade NAT.
+- **The host has no liveness signal from peers.** Peers transmit only when
+  acting, so the host learns of a drop only via transport `peerclose` — slow, and
+  silent on a half-open link. A peer→host ping plus a host-side per-seat watchdog
+  would make `connectedSeats` honest and let both sides hunt at once.
+- **Background timer throttling stalls the host's engine.** Browsers clamp
+  background intervals; a backgrounded host stops running the game for everyone
+  until it returns (state and queued actions do recover). Really an argument for
+  Phase 5 host durability.
+
 - Replace permanent `stopPolling()` with the slow/idle polling rates p2pcf
   already supports (`slowPollingRateMs`/`idlePollingRateMs`), or re-enable
   polling when `peerclose` fires. Tradeoff: modest ongoing Worker traffic in
