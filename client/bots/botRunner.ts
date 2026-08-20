@@ -18,6 +18,7 @@ import {
   submitEquation,
   resolveDecision,
   submitBotBetChoice,
+  setPlayerReady,
 } from '../gameStore';
 import type {
   GameState,
@@ -32,8 +33,10 @@ import { solveEquations } from './solver';
 
 /**
  * Each scheduled action is keyed so the same action is never double-scheduled.
- * Keys include round + phase + enough context to distinguish each unique action
- * (e.g. the active player index for betting).
+ * Keys must identify an *action slot*, not a seat: within one betting round the
+ * same seat can be asked to act more than once (anyone raising re-opens the
+ * betting), and a key that only named the seat would silently swallow every
+ * turn after the first — leaving the round unable to complete.
  */
 const scheduledKeys = new Set<string>();
 const pendingTimeouts = new Set<ReturnType<typeof setTimeout>>();
@@ -69,7 +72,10 @@ function handleState(state: GameState, botIds: Set<string>): void {
       const active = s.players[s.activePlayerIndex];
       if (!active || !botIds.has(active.id)) break;
 
-      const key = `${s.round}-${s.phase}-${s.activePlayerIndex}`;
+      // `bettingActionsThisRound` advances on every action, so it distinguishes
+      // this turn from the same seat's earlier turns while still deduplicating
+      // repeat renders of the turn we are already waiting on.
+      const key = `${s.round}-${s.phase}-${s.activePlayerIndex}-${s.bettingActionsThisRound}`;
       scheduleOnce(key, randomDelay(), () => {
         // Re-read state at fire time — it may have changed.
         const current = get(gameState);
@@ -85,9 +91,11 @@ function handleState(state: GameState, botIds: Set<string>): void {
     // ── Calculation ───────────────────────────────────────────────────────── //
     case 'calculation': {
       const s = state as CalculationState;
-      // Check whether any bot still needs to submit.
+      // A bot still has work to do if either equation is missing, or if it has
+      // both but has not declared itself ready.
       const needsAction = s.players.some(
-        (p) => botIds.has(p.id) && !p.folded && (p.lowEquation === null || p.highEquation === null),
+        (p) => botIds.has(p.id) && !p.folded
+          && (p.lowEquation === null || p.highEquation === null || !s.readyPlayerIds.includes(p.id)),
       );
       if (!needsAction) break;
 
@@ -106,6 +114,19 @@ function handleState(state: GameState, botIds: Set<string>): void {
 
           if (player.lowEquation  === null) submitEquation(botId, 'low',  lowExpr);
           if (player.highEquation === null) submitEquation(botId, 'high', highExpr);
+        }
+
+        // Bots must declare themselves ready — nobody else can.  The Ready
+        // button only renders for the seat this client controls, so in a
+        // networked game a bot has no one to press it, and the host's
+        // "Proceed to Betting Phase 2" waits on every active player being
+        // ready.  Done in a second pass so it sees the submissions above.
+        for (const botId of botIds) {
+          const current = get(gameState);
+          if (!current || current.phase !== 'calculation') return;
+          const player = (current as CalculationState).players.find((p) => p.id === botId);
+          if (!player || player.folded) continue;
+          if (player.lowEquation !== null && player.highEquation !== null) setPlayerReady(botId);
         }
       });
       break;
