@@ -57,10 +57,17 @@ describe('evaluateEquation', () => {
     expect(result).toEqual({ ok: true, value: 14 }); // not 20
   });
 
-  it('supports parentheses', () => {
+  it('rejects parentheses — precedence alone decides the order', () => {
     const cards: Card[] = [numCard(2), numCard(3), numCard(4), opCard('+'), opCard('×')];
+    // Grouping would turn 14 into 20; the rules do not allow buying that.
     const result = evaluateEquation('(2 + 3) × 4', cards);
-    expect(result).toEqual({ ok: true, value: 20 });
+    expect(result.ok).toBe(false);
+    expect(result.ok === false && result.error).toMatch(/Parentheses are not allowed/);
+  });
+
+  it('rejects a stray closing parenthesis', () => {
+    const cards: Card[] = [numCard(2), numCard(3), opCard('+')];
+    expect(evaluateEquation('2 + 3)', cards).ok).toBe(false);
   });
 
   it('produces negative results', () => {
@@ -75,15 +82,19 @@ describe('evaluateEquation', () => {
     expect(result.ok).toBe(false);
   });
 
-  it('rejects √ of negative', () => {
-    // We simulate it with subtraction result going negative — but √ is on a
-    // literal number, so construct a case where we try √ on 0 after arithmetic.
-    // The parser applies √ to the primary that immediately follows, so:
-    // √(1 - 4) — but with our grammar √ binds to a primary, so √ (1-4)
-    // would be √ applied to parenthesised expression.
+  it('applies √ to a single number, never to a sub-expression', () => {
     const cards: Card[] = [numCard(1), numCard(4), opCard('√'), opCard('-')];
-    const result = evaluateEquation('√(1 - 4)', cards);
-    expect(result.ok).toBe(false);
+    // Grouping is the only way to root an arithmetic result, and there is none,
+    // so √ of a negative is unreachable rather than merely rejected.
+    expect(evaluateEquation('√(1 - 4)', cards).ok).toBe(false);
+    // √ binds to the number beside it: this is (√4) - 1, not √(4 - 1).
+    expect(evaluateEquation('√4 - 1', cards)).toEqual({ ok: true, value: 1 });
+  });
+
+  it('rejects √ with no number after it', () => {
+    const cards: Card[] = [numCard(4), numCard(2), opCard('√'), opCard('+')];
+    expect(evaluateEquation('4 + 2 √', cards).ok).toBe(false);
+    expect(evaluateEquation('√ + 4 2', cards).ok).toBe(false);
   });
 
   it('rejects mismatched number cards', () => {
@@ -131,10 +142,9 @@ describe('evaluateEquation', () => {
     expect(result).toEqual({ ok: true, value: 5 });
   });
 
-  it('rejects expression with unclosed parenthesis', () => {
+  it('rejects an opening parenthesis', () => {
     const cards: Card[] = [numCard(3), numCard(5), opCard('+')];
-    const result = evaluateEquation('(3 + 5', cards);
-    expect(result.ok).toBe(false);
+    expect(evaluateEquation('(3 + 5', cards).ok).toBe(false);
   });
 
   it('rejects empty expression', () => {

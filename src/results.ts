@@ -75,9 +75,10 @@ function describeTiebreak(winner: DealtPlayer, rival: DealtPlayer, target: 1 | 2
  * win to whoever accumulated less rounding error and skip the card tie-break
  * entirely — which is precisely what that tie-break exists to decide.
  *
- * Exact arithmetic can't replace the tolerance: √ applies to any primary, so
- * ~10% of real equations evaluate to an irrational (measured over simulated
- * play), which no rational representation holds exactly.
+ * Exact arithmetic can't replace the tolerance: ~10% of real equations evaluate
+ * to an irrational (measured over simulated play — √ of a card value is
+ * irrational for 7 of the 11 possible values), which no rational
+ * representation holds exactly.
  *
  * The tolerance is safe because the achievable value space is coarse.  Over
  * 2400 equations from simulated rounds, the smallest gap between two *distinct*

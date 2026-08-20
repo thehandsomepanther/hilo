@@ -69,11 +69,10 @@ The game ends when only one player has chips remaining.
 
 - Supported operators: `+` `−` `×` `÷` `√`
 - Standard operator precedence applies (`×` and `÷` before `+` and `−`)
-- `√` is a unary prefix operator applied to a single number (e.g. `√9`)
-- Division by zero and square roots of negative numbers are invalid
+- `√` is a unary prefix operator applied to a single number (e.g. `√9`) — never to a running total, so `√7 + 2` is `(√7) + 2`
+- **No parentheses.** Precedence alone decides the order, so `2 + 3 × 4` is 14 and there is no way to make it 20
+- Division by zero is invalid
 - Every card in your hand must appear in the equation exactly once
-- There are no paretheticals at all (e.g. no `√(7 + 2)`)
-- Equations are evaluated according to order of operations
 
 ---
 

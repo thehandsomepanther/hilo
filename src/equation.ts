@@ -5,12 +5,18 @@
  * Also accepts * for × and / for ÷ for ease of input.
  *
  * Operator precedence (high → low):
- *   √  (unary prefix, applies to the single primary that follows)
+ *   √  (unary prefix, applies to the single number that follows)
  *   × ÷
  *   + -
  *
+ * There are no parentheses: grouping is not part of the game, so a `Token`
+ * cannot represent one and the grammar has nowhere to put one.  Precedence
+ * alone decides how an equation evaluates.  This is not merely cosmetic — the
+ * card UI has no way to enter a bracket, so accepting them would only ever
+ * benefit someone hand-crafting a submission over the wire.
+ *
  * Results may be any real number (including negative).
- * √ of a negative or division by zero are runtime errors.
+ * Division by zero is a runtime error.
  */
 
 import { Card } from './types';
@@ -19,8 +25,7 @@ import { Card } from './types';
 
 type TokNum = { type: 'num'; value: number };
 type TokOp = { type: 'op'; op: '+' | '-' | '×' | '÷' | '√' };
-type TokParen = { type: 'paren'; ch: '(' | ')' };
-type Token = TokNum | TokOp | TokParen;
+type Token = TokNum | TokOp;
 
 function tokenise(expr: string): Token[] {
   const tokens: Token[] = [];
@@ -43,8 +48,12 @@ function tokenise(expr: string): Token[] {
     if (ch === '*' || ch === '×') { tokens.push({ type: 'op', op: '×' }); i++; continue; }
     if (ch === '/' || ch === '÷') { tokens.push({ type: 'op', op: '÷' }); i++; continue; }
     if (ch === '√') { tokens.push({ type: 'op', op: '√' }); i++; continue; }
-    if (ch === '(') { tokens.push({ type: 'paren', ch: '(' }); i++; continue; }
-    if (ch === ')') { tokens.push({ type: 'paren', ch: ')' }); i++; continue; }
+
+    // Called out separately from the generic error: brackets are the one
+    // wrong-but-plausible thing someone might reach for.
+    if (ch === '(' || ch === ')') {
+      throw new Error('Parentheses are not allowed — operator precedence decides the order');
+    }
 
     throw new Error(`Unknown character: '${ch}'`);
   }
@@ -56,14 +65,14 @@ function tokenise(expr: string): Token[] {
 
 /**
  * Grammar:
- *   expr    := term  (('+' | '-') term)*
- *   term    := unary (('×' | '÷') unary)*
- *   unary   := '√' primary | primary
- *   primary := NUM | '(' expr ')'
+ *   expr  := term  (('+' | '-') term)*
+ *   term  := unary (('×' | '÷') unary)*
+ *   unary := '√'? NUM
  *
- * √ is intentionally restricted to a single primary (a number or parenthesised
- * sub-expression) per the rules: "Square Root cards can only be used on a
- * single number."
+ * The only operand is a number literal, which is what enforces the rule that
+ * "Square Root cards can only be used on a single number" — there is no
+ * sub-expression for √ to reach into.  It also means √'s operand is always a
+ * card value in 0–10, so it can never be negative.
  */
 class Parser {
   private pos = 0;
@@ -134,28 +143,19 @@ class Parser {
     if (t?.type === 'op' && t.op === '√') {
       this.pos++;
       this.operatorsUsed.push('√');
-      const val = this.primary();
-      if (val < 0) throw new Error('Square root of a negative number is not allowed');
-      return Math.sqrt(val);
+      // The operand is a card value in 0–10, so the root is always real.
+      return Math.sqrt(this.numberLiteral());
     }
-    return this.primary();
+    return this.numberLiteral();
   }
 
-  private primary(): number {
+  private numberLiteral(): number {
     const t = this.consume();
-    if (t.type === 'num') {
-      this.numbersUsed.push(t.value);
-      return t.value;
+    if (t.type !== 'num') {
+      throw new Error(`Expected a number, got '${t.op}'`);
     }
-    if (t.type === 'paren' && t.ch === '(') {
-      const val = this.expr();
-      const closing = this.consume();
-      if (closing.type !== 'paren' || closing.ch !== ')') {
-        throw new Error('Expected closing parenthesis');
-      }
-      return val;
-    }
-    throw new Error(`Unexpected token: ${JSON.stringify(t)}`);
+    this.numbersUsed.push(t.value);
+    return t.value;
   }
 }
 

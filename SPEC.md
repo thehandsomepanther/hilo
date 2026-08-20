@@ -207,6 +207,8 @@ The expression evaluator must:
 - Support operators: `+`, `-`, `×` (or `*`), `÷` (or `/`), `√`
 - Apply standard operator precedence (PEMDAS without exponentiation)
 - Apply `√` as a unary prefix operator on a single number
+- Reject parentheses — grouping is not part of the game, so precedence alone
+  determines evaluation order, and `√` can never apply to a sub-expression
 - Reject equations whose card multiset does not exactly match the player's hand
 - Allow negative intermediate and final results
 - Return a `number` (IEEE 754 float is acceptable; round to reasonable precision)
