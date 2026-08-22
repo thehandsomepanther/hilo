@@ -1,8 +1,11 @@
 <script lang="ts">
+  import { get } from 'svelte/store';
   import {
     setupAsHost, setupAsPeer, generateRoomId, hostProceed,
     lobbyState, myPlayerIndex, lobbyProceed, joinRejected, MAX_PLAYERS,
+    DEFAULT_BOT_DIFFICULTY,
   } from '../gameStore';
+  import { online } from '../online';
 
   type Props = { oncomplete: () => void };
   const { oncomplete }: Props = $props();
@@ -96,7 +99,48 @@
     keepRoomInUrl(code, worker);
   }
 
+  // ─── Local play ───────────────────────────────────────────────────────────────
+
+  /**
+   * One click from the front page to a playable single-player game: you plus
+   * two bots, keeping whatever chip/time settings are already in the lobby.
+   * Without this, "single player" means adding bots by hand and naming three
+   * seats before anything happens — a poor first launch for an installed app,
+   * which is exactly where the offline path lands.
+   *
+   * Still goes through Setup rather than starting the game, so bot difficulty
+   * and starting chips stay adjustable.
+   */
+  function playSolo() {
+    lobbyState.update((s) => ({
+      ...s,
+      players: [
+        { name: 'You', isBot: false },
+        { name: 'Bot 1', isBot: true, difficulty: DEFAULT_BOT_DIFFICULTY },
+        { name: 'Bot 2', isBot: true, difficulty: DEFAULT_BOT_DIFFICULTY },
+      ],
+    }));
+    oncomplete();
+  }
+
   // ─── Auto-join from invite URL (or from a reload) ─────────────────────────────
+
+  /**
+   * An invite this device can't act on yet because it is offline.  Joining
+   * needs the signalling worker, so attempting it now would burn the full
+   * 30-second connect timeout before failing — the worst possible first screen
+   * for an app launched on a plane.  Hold the invite instead and take it the
+   * moment a connection appears.
+   */
+  let deferredInvite = $state<{ code: string; worker: string } | null>(null);
+
+  function acceptInvite(code: string, worker: string) {
+    deferredInvite = null;
+    peerError = '';
+    peerJoined = true;
+    setupAsPeer(code, worker || undefined);
+    keepRoomInUrl(code, worker);
+  }
 
   const params = new URLSearchParams(window.location.search);
   const roomParam = params.get('room');
@@ -106,10 +150,20 @@
     workerUrl = workerParam;
     roomInput = code;
     mode = 'peer';
-    peerJoined = true;
-    setupAsPeer(code, workerParam || undefined);
-    keepRoomInUrl(code, workerParam);
+    if (get(online)) {
+      acceptInvite(code, workerParam);
+    } else {
+      deferredInvite = { code, worker: workerParam };
+      keepRoomInUrl(code, workerParam);
+    }
   }
+
+  // A held invite goes through by itself as soon as the network is back.
+  $effect(() => {
+    if ($online && deferredInvite !== null) {
+      acceptInvite(deferredInvite.code, deferredInvite.worker);
+    }
+  });
 
   // ─── Clipboard helper ────────────────────────────────────────────────────────
 
@@ -130,6 +184,25 @@
   <h2>Network Setup</h2>
 
   {#if mode === 'choose'}
+    {#snippet networkChoices()}
+      <button type="button" onclick={hostGame}>Host a game</button>
+      <button type="button" onclick={() => { mode = 'peer'; }}>Join a game</button>
+    {/snippet}
+
+    {#snippet localChoices()}
+      <button type="button" onclick={playSolo}>Play solo vs bots</button>
+      <button type="button" onclick={oncomplete}>Pass and play on this device</button>
+    {/snippet}
+
+    {#if !$online}
+      <p role="status" style="background-color: #fff4d6; padding: 0.5em; border: 1px solid #b8860b;">
+        <strong>You're offline.</strong>
+        Hosting and joining need a connection — that's how players find each
+        other. Everything on this device still works: play a full game against
+        bots, or pass the device around the table.
+      </p>
+    {/if}
+
     <p>
       <strong>Host</strong> creates a room and shares the code with other players.
       <strong>Join</strong> connects to an existing host using their room code.
@@ -148,12 +221,33 @@
       </label>
     </details>
     <br />
-    <button type="button" onclick={hostGame}>Host a game</button>
-    <button type="button" onclick={() => { mode = 'peer'; }}>Join a game</button>
-    <button type="button" onclick={oncomplete}>Play without networking</button>
+
+    <!--
+      Offline, the two local options lead and the network ones follow.  They
+      stay clickable either way: navigator.onLine reports a *link*, not
+      reachability, so a captive portal or a hotspot with no upstream both look
+      online — and the reverse can be wrong too. Emphasis, not a locked door.
+    -->
+    {#if $online}
+      {@render networkChoices()}
+      {@render localChoices()}
+    {:else}
+      {@render localChoices()}
+      <br />
+      {@render networkChoices()}
+    {/if}
 
   {:else if mode === 'host'}
     <h3>Hosting</h3>
+
+    {#if !$online}
+      <p role="status" style="background-color: #fff4d6; padding: 0.5em; border: 1px solid #b8860b;">
+        <strong>You're offline.</strong>
+        Nobody can join until this device is back on a network. The room stays
+        open — players will be able to connect once you're online again.
+      </p>
+    {/if}
+
     <p>Share this room code with players who want to join:</p>
 
     <p style="font-size: 2em; font-weight: bold; letter-spacing: 0.15em;">{roomId}</p>
@@ -175,7 +269,14 @@
     <!-- peer mode -->
     <h3>Joining</h3>
 
-    {#if !peerJoined}
+    {#if deferredInvite}
+      <p role="status" style="background-color: #fff4d6; padding: 0.5em; border: 1px solid #b8860b;">
+        <strong>You're offline — this invite needs a connection.</strong>
+        You've been invited to room <strong>{deferredInvite.code}</strong>.
+        It'll connect by itself the moment you're back on a network.
+      </p>
+      <button type="button" onclick={playSolo}>Play solo vs bots instead</button>
+    {:else if !peerJoined}
       <label>
         Room code:
         <br />

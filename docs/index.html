@@ -5,10 +5,24 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Equation Hi-Lo</title>
-  <script type="module" crossorigin src="/hilo/assets/index-CxVTrPqW.js"></script>
+
+  <!--
+    The manifest link and the service-worker registration are injected at build
+    time by vite-plugin-pwa (see vite.config.ts).  What follows is the part it
+    does not inject: the theme colour and the iOS-specific metadata that decides
+    how an installed app looks on the home screen and at launch.
+    Paths are relative so they survive both deploy bases (/hilo/ and /).
+  -->
+  <meta name="theme-color" content="#14141c" />
+  <link rel="icon" type="image/svg+xml" href="icons/icon.svg" />
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon-180.png" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="Hi-Lo" />
+  <script type="module" crossorigin src="/hilo/assets/index-C0wDm-IT.js"></script>
   <link rel="modulepreload" crossorigin href="/hilo/assets/preload-helper-B8TaM5wl.js">
   <link rel="stylesheet" crossorigin href="/hilo/assets/index-DZmWC63S.css">
-</head>
+<link rel="manifest" href="/hilo/manifest.webmanifest"></head>
 
 <body>
   <div id="app"></div>

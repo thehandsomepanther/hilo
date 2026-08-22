@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <!--
+    Maskable variant: full-bleed background (the platform crops it to whatever
+    shape it likes) with the mark scaled to 78% so it stays inside the safe
+    zone — the centred circle of 80% diameter — under any mask.
+  -->
+  <rect width="512" height="512" fill="#14141c" />
+  <g transform="translate(256 256) scale(0.78) translate(-256 -256)">
+    <g font-family="Helvetica Neue, Helvetica, Arial, sans-serif" font-weight="700" text-anchor="middle">
+      <text x="256" y="212" font-size="196" fill="#e8b923">20</text>
+      <!-- Optically centred: Helvetica's "1" carries a wide left side bearing. -->
+      <text x="246" y="438" font-size="196" fill="#f2f2f7">1</text>
+    </g>
+    <rect x="112" y="242" width="288" height="16" rx="8" fill="#b87333" />
+  </g>
+</svg>

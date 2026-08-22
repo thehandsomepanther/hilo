@@ -16,6 +16,7 @@
   import Results from './components/Results.svelte';
   import GameOver from './components/GameOver.svelte';
   import NetworkLobby from './components/NetworkLobby.svelte';
+  import { updateReady, applyPendingUpdate } from './pwa';
 
   const SUIT_ABBR: Record<string, string> = { Gold: 'G', Silver: 'S', Bronze: 'Br', Black: 'Bl' };
 
@@ -69,6 +70,19 @@
     {/if}
   {/if}
 </header>
+
+<!-- ── App update banner ────────────────────────────────────────────────────── -->
+{#if $updateReady}
+  <p role="status" style="background-color: #e0f0ff; padding: 0.5em; border: 1px solid #06c;">
+    <strong>A new version is ready.</strong>
+    {#if $gameState}
+      Reloading now would end the game in progress — finish the round first.
+    {:else}
+      Reload to pick it up.
+    {/if}
+    <button type="button" onclick={applyPendingUpdate}>Reload</button>
+  </p>
+{/if}
 
 <!-- ── Reconnection banner ──────────────────────────────────────────────────── -->
 {#if $networkMode === 'peer' && !$hostLinkUp}

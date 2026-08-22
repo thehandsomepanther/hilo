@@ -1,5 +1,6 @@
 import { mount } from 'svelte';
 import App from './App.svelte';
+import { initPwa } from './pwa';
 
 // Safari on macOS doesn't include buttons, selects, checkboxes, or radio
 // buttons in the Tab order unless they have an explicit tabindex.
@@ -29,6 +30,9 @@ new MutationObserver((mutations) => {
 
 // Patch elements already in the DOM at mount time.
 document.querySelectorAll(SAFARI_FOCUS_SELECTOR).forEach(patchTabIndex);
+
+// Precache the shell so the app opens with no network.  No-op in dev.
+initPwa();
 
 const app = mount(App, { target: document.getElementById('app')! });
 

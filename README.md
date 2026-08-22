@@ -6,6 +6,17 @@ Playable in a browser — no account or installation required. Supports local (p
 
 **[Play on GitHub Pages](https://thehandsomepanther.github.io/hilo/)**
 
+### Install it / play offline
+
+The site is a PWA, so your browser will offer to install it (on iOS, Share →
+Add to Home Screen). Once installed it runs with no connection at all: the whole
+app is cached on first visit, and **Play solo vs bots** and **Pass and play on
+this device** both work entirely offline.
+
+Hosting and joining still need a connection — that's how players find each
+other — so the lobby leads with the local options when you're offline. Note that
+a game in progress currently lives only in memory: closing the app loses it.
+
 ---
 
 ## How to Play
