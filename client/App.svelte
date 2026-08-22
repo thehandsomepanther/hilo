@@ -3,7 +3,8 @@
   import { get } from 'svelte/store';
   import {
     gameState, pendingDecision, isDealing, resolveDecision, networkMode, localPlayerId,
-    seatOnline, hostLinkUp, queuedActionCount, controlsSeat,
+    seatOnline, hostLinkUp, queuedActionCount, controlsSeat, botDifficulties,
+    difficultyLabel,
   } from './gameStore';
   import type { DealtPlayer, Card } from './gameStore';
   import Setup from './components/Setup.svelte';
@@ -190,6 +191,9 @@
                   >{online ? '●' : '○'}</span>
                 {/if}
                 {player.name}
+                {#if $botDifficulties.has(player.id)}
+                  <em>({difficultyLabel($botDifficulties.get(player.id)!)})</em>
+                {/if}
                 {#if $gameState && $gameState.players.indexOf(player) === $gameState.dealerIndex} (D){/if}
                 {#if isActive} ◀{/if}
                 {#if player.folded} (folded){/if}

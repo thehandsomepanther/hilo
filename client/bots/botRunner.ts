@@ -5,6 +5,9 @@
  * the full unredacted GameState and call the same gameStore action functions
  * that human players use — no special code paths needed in game logic.
  *
+ * Each bot seat carries its own `BotDifficulty`, chosen in the lobby, which
+ * resolves to the `DifficultyProfile` handed to every decision function.
+ *
  * Timing: actions are delayed by a short random interval (700–1100 ms) to
  * feel natural.  × card decisions use a shorter delay (200 ms) so dealing
  * doesn't feel stuck.
@@ -27,7 +30,12 @@ import type {
   HighLowBetState,
 } from '../../src/types';
 import { decideBet, decideMultiplication, decideBetChoice } from './strategy';
-import { solveEquations } from './solver';
+import { rankedSolutions, pickCandidate, solveEquations } from './solver';
+import { profileFor } from './difficulty';
+import type { BotDifficulty } from './difficulty';
+
+/** Bot player id → the difficulty its seat was given in the lobby. */
+export type BotRoster = ReadonlyMap<string, BotDifficulty>;
 
 // ─── Scheduling helpers ───────────────────────────────────────────────────────
 
@@ -63,14 +71,14 @@ function clearAllPending(): void {
 
 // ─── Phase handlers ───────────────────────────────────────────────────────────
 
-function handleState(state: GameState, botIds: Set<string>): void {
+function handleState(state: GameState, bots: BotRoster): void {
   switch (state.phase) {
     // ── Betting ───────────────────────────────────────────────────────────── //
     case 'betting-1':
     case 'betting-2': {
       const s = state as BettingState;
       const active = s.players[s.activePlayerIndex];
-      if (!active || !botIds.has(active.id)) break;
+      if (!active || !bots.has(active.id)) break;
 
       // `bettingActionsThisRound` advances on every action, so it distinguishes
       // this turn from the same seat's earlier turns while still deduplicating
@@ -82,8 +90,8 @@ function handleState(state: GameState, botIds: Set<string>): void {
         if (!current || (current.phase !== 'betting-1' && current.phase !== 'betting-2')) return;
         const cs = current as BettingState;
         const player = cs.players[cs.activePlayerIndex];
-        if (!player || !botIds.has(player.id)) return;
-        doBettingAction(decideBet(player, cs));
+        if (!player || !bots.has(player.id)) return;
+        doBettingAction(decideBet(player, cs, profileFor(bots.get(player.id))));
       });
       break;
     }
@@ -94,14 +102,14 @@ function handleState(state: GameState, botIds: Set<string>): void {
       // A bot still has work to do if either equation is missing, or if it has
       // both but has not declared itself ready.
       const needsAction = s.players.some(
-        (p) => botIds.has(p.id) && !p.folded
+        (p) => bots.has(p.id) && !p.folded
           && (p.lowEquation === null || p.highEquation === null || !s.readyPlayerIds.includes(p.id)),
       );
       if (!needsAction) break;
 
       const key = `${s.round}-calculation`;
       scheduleOnce(key, randomDelay(), () => {
-        for (const botId of botIds) {
+        for (const botId of bots.keys()) {
           const current = get(gameState);
           if (!current || current.phase !== 'calculation') return;
           const cs = current as CalculationState;
@@ -110,10 +118,19 @@ function handleState(state: GameState, botIds: Set<string>): void {
           if (player.lowEquation !== null && player.highEquation !== null) continue;
 
           const tokens = [player.secretCard, ...player.faceUpCards, ...player.personalOperators];
-          const { lowExpr, highExpr } = solveEquations(tokens);
+          const { equationSlack } = profileFor(bots.get(botId));
 
-          if (player.lowEquation  === null) submitEquation(botId, 'low',  lowExpr);
-          if (player.highEquation === null) submitEquation(botId, 'high', highExpr);
+          // A hard bot (slack 0) always plays the closest result it can reach;
+          // easier ones settle for something further down the ranking, which
+          // is what makes them beatable on the arithmetic rather than only on
+          // the cards.
+          const ranked = rankedSolutions(tokens);
+          const low  = pickCandidate(ranked.low,  equationSlack);
+          const high = pickCandidate(ranked.high, equationSlack);
+          const fallback = solveEquations(tokens);
+
+          if (player.lowEquation  === null) submitEquation(botId, 'low',  low?.expr  ?? fallback.lowExpr);
+          if (player.highEquation === null) submitEquation(botId, 'high', high?.expr ?? fallback.highExpr);
         }
 
         // Bots must declare themselves ready — nobody else can.  The Ready
@@ -121,7 +138,7 @@ function handleState(state: GameState, botIds: Set<string>): void {
         // networked game a bot has no one to press it, and the host's
         // "Proceed to Betting Phase 2" waits on every active player being
         // ready.  Done in a second pass so it sees the submissions above.
-        for (const botId of botIds) {
+        for (const botId of bots.keys()) {
           const current = get(gameState);
           if (!current || current.phase !== 'calculation') return;
           const player = (current as CalculationState).players.find((p) => p.id === botId);
@@ -136,7 +153,7 @@ function handleState(state: GameState, botIds: Set<string>): void {
     case 'high-low-bet': {
       const s = state as HighLowBetState;
       const needsAction = s.players.some(
-        (p) => botIds.has(p.id) && !p.folded && p.betChoice === null,
+        (p) => bots.has(p.id) && !p.folded && p.betChoice === null,
       );
       if (!needsAction) break;
 
@@ -146,8 +163,8 @@ function handleState(state: GameState, botIds: Set<string>): void {
         if (!current || current.phase !== 'high-low-bet') return;
         const hs = current as HighLowBetState;
         for (const player of hs.players) {
-          if (!botIds.has(player.id) || player.folded || player.betChoice !== null) continue;
-          submitBotBetChoice(player.id, decideBetChoice(player));
+          if (!bots.has(player.id) || player.folded || player.betChoice !== null) continue;
+          submitBotBetChoice(player.id, decideBetChoice(player, profileFor(bots.get(player.id))));
         }
       });
       break;
@@ -161,24 +178,24 @@ function handleState(state: GameState, botIds: Set<string>): void {
 // ─── Public API ───────────────────────────────────────────────────────────────
 
 /**
- * Start the bot runner for the given set of bot player IDs.
+ * Start the bot runner for the given bot seats and their difficulties.
  * Returns an unsubscribe function — call it when the game ends.
  */
-export function startBotRunner(botIds: Set<string>): () => void {
+export function startBotRunner(bots: BotRoster): () => void {
   clearAllPending();
 
   const unsubState = gameState.subscribe((state) => {
     if (!state) return;
-    handleState(state, botIds);
+    handleState(state, bots);
   });
 
   const unsubDecision = pendingDecision.subscribe((pd) => {
-    if (!pd || !botIds.has(pd.player.id)) return;
+    if (!pd || !bots.has(pd.player.id)) return;
     // Short delay so the UI can render the "awaiting decision" overlay briefly.
     setTimeout(() => {
       const current = get(pendingDecision);
       if (!current || current.player.id !== pd.player.id) return;
-      resolveDecision(decideMultiplication(current.player));
+      resolveDecision(decideMultiplication(current.player, profileFor(bots.get(pd.player.id))));
     }, 200);
   });
 

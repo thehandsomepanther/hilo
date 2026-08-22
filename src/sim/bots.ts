@@ -1,28 +1,55 @@
 import type { Player, DealtPlayer, MultiplicationDecision, BettingState, NumberCard } from '../types';
 import type { BettingAction } from '../game';
-import {
-  decideBet as conservativeDecideBet,
-  decideMultiplication as conservativeDecideMultiplication,
-  decideBetChoice as conservativeDecideBetChoice,
-} from '../../client/bots/strategy';
+import { decideBet, decideMultiplication, decideBetChoice } from '../../client/bots/strategy';
+import { profileFor } from '../../client/bots/difficulty';
+import type { BotDifficulty } from '../../client/bots/difficulty';
 
 // ─── Strategy interface ───────────────────────────────────────────────────────
 
-export type BotProfile = 'conservative' | 'random';
+/**
+ * `easy` / `medium` / `hard` drive the real game's bots; `conservative` is an
+ * alias for `medium` kept so existing simulation configs still read the same.
+ * `random` is not a difficulty at all — it is a fuzzer that takes legal but
+ * unreasonable lines the tuned profiles never would.
+ */
+export type BotProfile = 'conservative' | 'random' | BotDifficulty;
 
 export interface BotStrategy {
   decideMultiplication(player: Player): MultiplicationDecision;
   decideBet(player: DealtPlayer, state: BettingState): BettingAction;
-  decideBetChoice(player: DealtPlayer): 'high' | 'low';
+  decideBetChoice(player: DealtPlayer): 'high' | 'low' | 'swing';
 }
 
-// ─── Conservative strategy ────────────────────────────────────────────────────
+// ─── Difficulty-driven strategies ─────────────────────────────────────────────
 
-export const conservativeStrategy: BotStrategy = {
-  decideMultiplication: conservativeDecideMultiplication,
-  decideBet: conservativeDecideBet,
-  decideBetChoice: conservativeDecideBetChoice,
-};
+/**
+ * Cheap stand-in for `handStrength`, which runs the brute-force solver.  The
+ * harness plays thousands of games and already substitutes numeric proxies for
+ * equations (see `computeEquations` below) for exactly this reason; the
+ * betting paths under test care that *a* strength arrives, not that it is the
+ * true one.
+ */
+function proxyStrength(player: DealtPlayer): number {
+  const nums = [player.secretCard, ...player.faceUpCards]
+    .filter((c): c is NumberCard => c.kind === 'number')
+    .map((c) => c.value as number);
+  const sum = nums.reduce((s, v) => s + v, 0);
+  const best = Math.min(Math.abs(sum - 1), Math.abs(sum + 10 - 20));
+  return 1 / (1 + best);
+}
+
+function difficultyStrategy(difficulty: BotDifficulty): BotStrategy {
+  // `evaluatesMultiplication` is forced off for the same reason as the strength
+  // proxy: it is a solver call, and the harness cannot afford one per decision.
+  const profile = { ...profileFor(difficulty), evaluatesMultiplication: false };
+  return {
+    decideMultiplication: (player) => decideMultiplication(player, profile),
+    decideBet: (player, state) => decideBet(player, state, profile, proxyStrength(player)),
+    decideBetChoice: (player) => decideBetChoice(player, profile),
+  };
+}
+
+export const conservativeStrategy: BotStrategy = difficultyStrategy('medium');
 
 // ─── Random strategy ──────────────────────────────────────────────────────────
 
@@ -73,7 +100,9 @@ export const randomStrategy: BotStrategy = {
 };
 
 export function getStrategy(profile: BotProfile): BotStrategy {
-  return profile === 'random' ? randomStrategy : conservativeStrategy;
+  if (profile === 'random') return randomStrategy;
+  if (profile === 'conservative') return conservativeStrategy;
+  return difficultyStrategy(profile);
 }
 
 // ─── Equation stub ────────────────────────────────────────────────────────────

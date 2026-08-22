@@ -47,6 +47,11 @@ import { MAX_PLAYERS } from '../src/deck';
 export { MAX_PLAYERS, MIN_PLAYERS } from '../src/deck';
 export { generateRoomId } from './network';
 import { startBotRunner } from './bots/botRunner';
+import { DEFAULT_BOT_DIFFICULTY } from './bots/difficulty';
+import type { BotDifficulty } from './bots/difficulty';
+
+export { BOT_DIFFICULTIES, DEFAULT_BOT_DIFFICULTY, difficultyLabel } from './bots/difficulty';
+export type { BotDifficulty } from './bots/difficulty';
 
 // Re-export types that components need so they never import src/ directly.
 export type { Player, DealtPlayer, Card } from '../src/types';
@@ -128,6 +133,15 @@ export const botPlayerIds = derived(lobbyState, (lobby) =>
       .filter((id): id is string => id !== null),
   ),
 );
+
+/** Bot player id → its difficulty, for showing players what they are up against. */
+export const botDifficulties = derived(lobbyState, (lobby) => {
+  const map = new Map<string, BotDifficulty>();
+  lobby.players.forEach((p, i) => {
+    if (p.isBot) map.set(`player-${i}`, p.difficulty ?? DEFAULT_BOT_DIFFICULTY);
+  });
+  return map;
+});
 
 /**
  * Does this client act for `playerId` — see its secret card and equations,
@@ -538,8 +552,27 @@ export function addBot(): void {
   lobbyState.update((s) => {
     if (s.players.length >= MAX_PLAYERS) return s;
     const botCount = s.players.filter((p) => p.isBot).length;
-    return { ...s, players: [...s.players, { name: `Bot ${botCount + 1}`, isBot: true }] };
+    return {
+      ...s,
+      players: [
+        ...s.players,
+        { name: `Bot ${botCount + 1}`, isBot: true, difficulty: DEFAULT_BOT_DIFFICULTY },
+      ],
+    };
   });
+}
+
+/**
+ * Host/standalone only — bots are only ever added by the host, so there is no
+ * peer path to serialize.  Peers still see the change: every write to
+ * `lobbyState` is broadcast by the subscription above.
+ */
+export function updateBotDifficulty(index: number, difficulty: BotDifficulty): void {
+  if (get(networkMode) === 'peer') return;
+  lobbyState.update((s) => ({
+    ...s,
+    players: s.players.map((p, i) => (i === index && p.isBot ? { ...p, difficulty } : p)),
+  }));
 }
 
 export function updateLobbyName(index: number, name: string): void {
@@ -569,16 +602,16 @@ export function initGame(playerNames: string[], startingChips: number, enforceTi
   const idx = get(myPlayerIndex);
   if (idx !== null) localPlayerId.set(`player-${idx}`);
 
-  // Start bot runner for any bot slots (host and standalone only).
+  // Start bot runner for any bot slots (host and standalone only), each with
+  // the difficulty its lobby slot was given.
   stopBots?.();
   stopBots = null;
   const lobby = get(lobbyState);
-  const botIds = new Set(
-    lobby.players
-      .map((p, i) => (p.isBot ? `player-${i}` : null))
-      .filter((id): id is string => id !== null),
-  );
-  if (botIds.size > 0) stopBots = startBotRunner(botIds);
+  const bots = new Map<string, BotDifficulty>();
+  lobby.players.forEach((p, i) => {
+    if (p.isBot) bots.set(`player-${i}`, p.difficulty ?? DEFAULT_BOT_DIFFICULTY);
+  });
+  if (bots.size > 0) stopBots = startBotRunner(bots);
 }
 
 export function doForcedBets(): void {

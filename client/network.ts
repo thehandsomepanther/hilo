@@ -23,13 +23,18 @@
 import type { GameState, Player, MultiplicationDecision } from '../src/types';
 import type { BettingAction } from '../src/game';
 import type { Transport, PollingMode } from './transport';
+import type { BotDifficulty } from './bots/difficulty';
 import {
   OutboundActionQueue, InboundActionFilter, ACTION_RETRY_TICK_MS,
 } from './protocol';
 
 // ─── Lobby types ─────────────────────────────────────────────────────────────
 
-export type LobbyPlayer = { name: string; isBot: boolean };
+/**
+ * `difficulty` is only meaningful on a bot slot, and is optional so a snapshot
+ * from a client that predates the setting still parses.
+ */
+export type LobbyPlayer = { name: string; isBot: boolean; difficulty?: BotDifficulty };
 
 export type LobbyState = {
   players: LobbyPlayer[];

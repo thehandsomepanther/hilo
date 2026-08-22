@@ -18,6 +18,7 @@ import { applyBettingAction } from '../../src/game';
 import type {
   BettingState, CalculationState, DealtPlayer, NumberCard, OperatorCard,
 } from '../../src/types';
+import type { BotDifficulty } from '../bots/difficulty';
 
 const num = (value: NumberCard['value'], suit: NumberCard['suit'] = 'Gold'): NumberCard =>
   ({ kind: 'number', value, suit });
@@ -58,6 +59,10 @@ function calculationState(): CalculationState {
 
 const logLength = () => get(gameState)!.log.length;
 
+/** Bot seats at the default difficulty — these tests are about scheduling, not skill. */
+const roster = (...ids: string[]): Map<string, BotDifficulty> =>
+  new Map(ids.map((id) => [id, 'medium' as const]));
+
 describe('bot betting turns', () => {
   let stop: (() => void) | null = null;
 
@@ -65,7 +70,7 @@ describe('bot betting turns', () => {
   afterEach(() => { stop?.(); stop = null; _resetNetworkForTests(); vi.useRealTimers(); });
 
   it('acts again when its seat comes round a second time in one betting round', () => {
-    stop = startBotRunner(new Set(['player-0']));
+    stop = startBotRunner(roster('player-0'));
 
     gameState.set(bettingState(0));
     vi.advanceTimersByTime(2000);
@@ -84,7 +89,7 @@ describe('bot betting turns', () => {
   });
 
   it('still acts only once for a single turn, however often the state re-renders', () => {
-    stop = startBotRunner(new Set(['player-0']));
+    stop = startBotRunner(roster('player-0'));
 
     const s = bettingState(0);
     gameState.set(s);
@@ -96,7 +101,7 @@ describe('bot betting turns', () => {
   });
 
   it('does not act for a seat that is not a bot', () => {
-    stop = startBotRunner(new Set(['player-1']));
+    stop = startBotRunner(roster('player-1'));
     gameState.set(bettingState(0));   // human's turn
     vi.advanceTimersByTime(3000);
     expect(logLength()).toBe(0);
@@ -110,7 +115,7 @@ describe('bot readiness in the calculation phase', () => {
   afterEach(() => { stop?.(); stop = null; _resetNetworkForTests(); vi.useRealTimers(); });
 
   it('submits both equations and then declares itself ready', () => {
-    stop = startBotRunner(new Set(['player-1']));
+    stop = startBotRunner(roster('player-1'));
     gameState.set(calculationState());
     vi.advanceTimersByTime(2000);
 
@@ -123,7 +128,7 @@ describe('bot readiness in the calculation phase', () => {
   });
 
   it('readies every bot, leaving human seats alone', () => {
-    stop = startBotRunner(new Set(['player-0', 'player-1']));
+    stop = startBotRunner(roster('player-0', 'player-1'));
     gameState.set({
       ...calculationState(),
       players: [makePlayer('player-0'), makePlayer('player-1'), makePlayer('player-2')],
@@ -136,7 +141,7 @@ describe('bot readiness in the calculation phase', () => {
   });
 
   it('leaves a folded bot out of it', () => {
-    stop = startBotRunner(new Set(['player-1']));
+    stop = startBotRunner(roster('player-1'));
     gameState.set({
       ...calculationState(),
       players: [makePlayer('player-0'), makePlayer('player-1', { folded: true })],

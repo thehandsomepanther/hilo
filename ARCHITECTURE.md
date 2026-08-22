@@ -161,6 +161,16 @@ At the end of the `high-low-bet` phase, `resolveRound` (in `src/results.ts`) awa
 
 ---
 
+## Seat Ownership
+
+`controlsSeat` (`client/gameStore.ts`) is the single predicate the UI uses to decide whether a client acts for a seat and sees its secret card, its equations, and its bet choice. Every component asks it rather than comparing against `localPlayerId` directly.
+
+With a network seat assigned, exactly one seat qualifies: our own. Standalone has no seat assignment, because pass-and-play shares one screen — so every *human* seat is ours. A bot is not: it acts for itself through the bot runner, and its cards stay hidden until `results` like any other opponent's. Without this, a solo game against bots dealt every hand face-up and asked the human to build the bots' equations and pick their side for them.
+
+The consequence for the standalone high/low phase is that only some seats report in at once. `doSubmitBetChoices` therefore applies the choices it was given and advances only when every unfolded player has one — the bots submit theirs independently, and resolving the round early would drop them from both pots.
+
+---
+
 ## Networking
 
 The networking layer uses WebRTC data channels, with a Cloudflare Worker (p2pcf) for signalling and room discovery only — players share a 6-character room code, and no game data passes through the Worker.
@@ -190,7 +200,7 @@ Peer tab:  displays GameState ← from host    → sends SerializedAction → to
 
 **Privacy during high-low-bet**: in the `high-low-bet` phase, each peer receives a sanitized copy of the state with all other players' `betChoice` fields nulled out. The reveal happens when all choices are recorded and the state transitions to `results`, at which point the full state is broadcast.
 
-**Bots in networked games**: bots run exclusively on the host tab. They are indistinguishable from human players in the game engine; the distinction lives only in `lobbyState.players[i].isBot`, which `initGame` uses to build the `botIds` set passed to `startBotRunner`.
+**Bots in networked games**: bots run exclusively on the host tab. They are indistinguishable from human players in the game engine; the distinction lives only in `lobbyState.players[i].isBot`, which `initGame` uses to build the bot roster passed to `startBotRunner`.
 
 ---
 
@@ -206,12 +216,16 @@ Bots run on the host tab (or in standalone mode) via `client/bots/botRunner.ts`,
 
 **Calculation phase**: since `gameState.set(...)` triggers subscribers synchronously, submitting equations for multiple bots in one callback could cause re-entrancy. The calculation handler iterates over `botIds` (not a snapshot of `cs.players`), calling `get(gameState)` before each bot to always operate on the latest state.
 
-**Strategy** (`client/bots/strategy.ts`):
-- Betting: check when free; call if the cost is ≤ 25% of remaining chips; fold otherwise. Bots never raise.
-- × card: accept if the bot has a + operator (discard it); else accept if it has − (discard it); else decline.
-- High/low choice: compare `closenessToTarget(lowResult, 1)` vs `closenessToTarget(highResult, 20)` and pick the closer side. Bots never choose swing.
+**Difficulty** (`client/bots/difficulty.ts`): each bot seat carries an `easy | medium | hard` setting chosen in the lobby, stored on `LobbyPlayer.difficulty` and resolved to a `DifficultyProfile` that every decision function takes as a parameter. `initGame` hands `startBotRunner` a `Map<playerId, BotDifficulty>` rather than a bare set of ids.
 
-**Solver** (`client/bots/solver.ts`): exhaustive search over all permutations of number cards × all permutations of binary operator cards × all placements of √ cards. Each candidate is built as a flat infix string and validated through `evaluateEquation` (which enforces the card multiset constraint). The best expression closest to 1 and closest to 20 are returned. Typical hand sizes (~7–8 tokens) produce at most ~1500 candidates.
+The dominant dial is `equationSlack`, because the solver can always find the closest reachable result and a bot that always plays it cannot be out-calculated. `hard` has slack 0 — it is exactly the bot that existed before difficulty did. The rest of the profile covers whether the bot's price tolerance responds to the hand it holds (`readsOwnHand`), whether it raises, whether it solves the × decision rather than using the static rule, how often it declares the wrong side, and whether it understands swing.
+
+**Strategy** (`client/bots/strategy.ts`):
+- Betting: check when free; call while the price stays within `baseCallFraction` of the stack, scaled by `handStrength` when the profile reads its own hand; fold otherwise. Hard bots raise on a strong hand, always capped by `maxRaiseAmount` — `applyBettingAction` throws on a raise above the smallest active stack, so the cap is not optional.
+- × card: without `evaluatesMultiplication`, accept if the bot has a + operator (discard it), else accept if it has − (discard it), else decline. With it, solve the hand both ways — padded with a placeholder for the unseen bonus card — and take the better branch.
+- High/low choice: compare `closenessToTarget(lowResult, 1)` vs `closenessToTarget(highResult, 20)` and pick the closer side, inverted at the profile's `sideMistakeChance`. Only hard bots declare swing, and only when both sides are all but exact — swing must win *both* halves.
+
+**Solver** (`client/bots/solver.ts`): exhaustive search over all permutations of number cards × all permutations of binary operator cards × all placements of √ cards. Each candidate is built as a flat infix string and validated through `evaluateEquation` (which enforces the card multiset constraint). `rankedSolutions` returns every candidate ordered by distance to each target, **deduplicated by result value** so that reaching further down the list means a worse answer rather than another spelling of the best one; `pickCandidate` draws from the leading `1 + slack × (n − 1)` of them. `solveEquations` is the thin best-of wrapper. Typical hand sizes (~7–8 tokens) produce at most ~1500 candidates, and results are memoised per hand because betting now consults the solver on every decision.
 
 ---
 

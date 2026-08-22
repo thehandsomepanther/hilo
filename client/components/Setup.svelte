@@ -2,8 +2,10 @@
   import {
     lobbyState, myPlayerIndex, networkMode, seatOnline, lobbyFull, MAX_PLAYERS,
     addPlayer, removePlayer, updateLobbyName, updateStartingChips, updateEnforceTimeLimit,
-    initGame, addBot,
+    initGame, addBot, updateBotDifficulty,
+    BOT_DIFFICULTIES, DEFAULT_BOT_DIFFICULTY, difficultyLabel,
   } from '../gameStore';
+  import type { BotDifficulty } from '../gameStore';
 
   let error = $state('');
 
@@ -76,6 +78,15 @@
             placeholder="Bot name"
             oninput={(e) => updateLobbyName(i, (e.target as HTMLInputElement).value)}
           />
+          <select
+            aria-label="{player.name || `Bot ${i + 1}`} difficulty"
+            value={player.difficulty ?? DEFAULT_BOT_DIFFICULTY}
+            onchange={(e) => updateBotDifficulty(i, (e.target as HTMLSelectElement).value as BotDifficulty)}
+          >
+            {#each BOT_DIFFICULTIES as level}
+              <option value={level}>{difficultyLabel(level)}</option>
+            {/each}
+          </select>
         {:else if isMine(i)}
           <input
             type="text"
@@ -91,6 +102,10 @@
             readonly
             disabled
           />
+          {#if player.isBot}
+            <!-- Peers can't set it, but they should know what is at the table -->
+            <em>({difficultyLabel(player.difficulty ?? DEFAULT_BOT_DIFFICULTY)})</em>
+          {/if}
         {/if}
       </label>
 
