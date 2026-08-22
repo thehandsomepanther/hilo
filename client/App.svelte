@@ -182,6 +182,14 @@
             {@const showSecret = mine || (phase === 'results' && !player.folded)}
             {@const showEquations = mine || phase === 'results'}
             {@const dealt = 'secretCard' in player && player.secretCard !== null ? player as DealtPlayer : null}
+            <!-- A √ or an accepted × is dealt face-up but played as an operator,
+                 so it belongs under Operators next to the personal ones rather
+                 than among the numbers. -->
+            {@const faceUpNumbers = dealt ? dealt.faceUpCards.filter((c) => c.kind === 'number') : []}
+            {@const operators = [
+              ...player.personalOperators,
+              ...(dealt ? dealt.faceUpCards.filter((c) => c.kind === 'operator') : []),
+            ]}
             <tr style={(isMe || isActive) ? 'background-color: #fffbcc; font-weight: bold;' : ''}>
               <td>
                 {#if showPresence}
@@ -202,8 +210,8 @@
               <td>{player.chips}</td>
               <td>{player.currentBet}</td>
               <td>{dealt ? (showSecret ? renderCard(dealt.secretCard) : '?') : '—'}</td>
-              <td>{dealt && dealt.faceUpCards.length ? dealt.faceUpCards.map(renderCard).join('  ') : '—'}</td>
-              <td>{player.personalOperators.length ? player.personalOperators.map((op) => op.operator).join('  ') : '—'}</td>
+              <td>{faceUpNumbers.length ? faceUpNumbers.map(renderCard).join('  ') : '—'}</td>
+              <td>{operators.length ? operators.map(renderCard).join('  ') : '—'}</td>
               <td>
                 {#if dealt && dealt.betChoice !== null}
                   {(mine || phase === 'results' || phase === 'game-over')
