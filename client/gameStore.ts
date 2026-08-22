@@ -113,6 +113,39 @@ export const seatOnline = derived(
     lobby.players.map((p, i) => mode === 'standalone' || p.isBot || seats.includes(i)),
 );
 
+// ─── Seat ownership ───────────────────────────────────────────────────────────
+
+/**
+ * Player ids of the seats filled by bots.  `initGame` names seat `i`
+ * `player-${i}`, the same mapping it uses to build the bot runner's id set, so
+ * the lobby's `isBot` flags carry straight over to game player ids.  Peers
+ * receive the lobby as a broadcast, so this is populated on every client.
+ */
+export const botPlayerIds = derived(lobbyState, (lobby) =>
+  new Set(
+    lobby.players
+      .map((p, i) => (p.isBot ? `player-${i}` : null))
+      .filter((id): id is string => id !== null),
+  ),
+);
+
+/**
+ * Does this client act for `playerId` — see its secret card and equations,
+ * and take its turns?
+ *
+ * With a network seat assigned, exactly one seat qualifies: our own.
+ * Standalone has no seat assignment because pass-and-play shares a screen, so
+ * every *human* seat is ours — but a bot is not.  Its cards stay hidden and it
+ * acts for itself through the bot runner, which is what makes a standalone
+ * game against bots playable as single-player rather than as solitaire with
+ * every hand face-up.
+ */
+export const controlsSeat = derived(
+  [localPlayerId, botPlayerIds],
+  ([myId, bots]) =>
+    (playerId: string): boolean => (myId !== null ? playerId === myId : !bots.has(playerId)),
+);
+
 /**
  * A peer treats silence as a disconnect after this long.  The host heartbeats
  * every HEARTBEAT_INTERVAL_MS, so three missed beats is a real outage rather
@@ -792,10 +825,28 @@ export function doSubmitBetChoices(choices: Map<string, DealtPlayer['betChoice']
   if (!state || state.phase !== 'high-low-bet') return;
   const hlState = state as HighLowBetState;
   const withChoices = applyBetChoices(hlState, choices);
-  const entries = [...choices.entries()]
-    .map(([id, c]) => `${hlState.players.find((p) => p.id === id)?.name ?? id} chose ${c}`)
+
+  // Only the seats this client controls are in `choices`; a standalone game
+  // with bots leaves the rest to the bot runner, which may not have decided
+  // yet.  Advancing here would resolve the round with their choice still null
+  // and drop them from both pots, so wait — and keep the choices out of the
+  // log until there is nothing left to hide.
+  const allChosen = withChoices.players
+    .filter((p) => !p.folded)
+    .every((p) => p.betChoice !== null);
+  if (!allChosen) {
+    const names = [...choices.keys()]
+      .map((id) => `${hlState.players.find((p) => p.id === id)?.name ?? id} submitted their bet`)
+      .join('; ');
+    gameState.set(appendLog(withChoices, names));
+    return;
+  }
+
+  const summary = withChoices.players
+    .filter((p) => !p.folded && p.betChoice !== null)
+    .map((p) => `${p.name} chose ${p.betChoice}`)
     .join('; ');
-  const withLog = appendLog(withChoices, entries) as HighLowBetState;
+  const withLog = appendLog(withChoices, summary) as HighLowBetState;
   gameState.set(advanceFromHighLowBet(withLog));
 }
 

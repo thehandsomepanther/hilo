@@ -1,26 +1,34 @@
 <script lang="ts">
   import { untrack } from 'svelte';
-  import { gameState, doSubmitBetChoices, submitMyBetChoice, localPlayerId } from '../gameStore';
+  import { gameState, doSubmitBetChoices, submitMyBetChoice, localPlayerId, controlsSeat } from '../gameStore';
   import type { DealtPlayer } from '../gameStore';
 
   // ─── Standalone flow (localPlayerId is null) ──────────────────────────────
-  // Collect all players' choices locally then reveal at once.
+  // Collect the choices of every seat this client plays — all the humans in a
+  // pass-and-play game — then reveal them at once.  Bots are excluded: they
+  // choose for themselves through the bot runner, and nobody gets to pick a
+  // bot's side for it.
 
   const hlPlayers = $derived(
     ($gameState?.phase === 'high-low-bet' ? $gameState.players : []) as DealtPlayer[],
   );
 
+  /** The seats this client chooses for, still waiting on a decision or not. */
+  const myPlayers = $derived(
+    hlPlayers.filter((p) => !p.folded && $controlsSeat(p.id)),
+  );
+
+  /** Once every seat we play has a recorded choice there is nothing left to do. */
+  const submitted = $derived(myPlayers.every((p) => p.betChoice !== null));
+
   let choices = $state<Map<string, DealtPlayer['betChoice']>>(new Map());
-  let revealed = $state(false);
   let error = $state('');
 
   $effect(() => {
-    const players = hlPlayers;
+    const players = myPlayers;
     const prev = untrack(() => choices);
     const next = new Map<string, DealtPlayer['betChoice']>();
-    for (const p of players) {
-      if (!p.folded) next.set(p.id, prev.get(p.id) ?? null);
-    }
+    for (const p of players) next.set(p.id, prev.get(p.id) ?? null);
     choices = next;
   });
 
@@ -29,7 +37,7 @@
   }
 
   function revealAll() {
-    const activePlayers = hlPlayers.filter((p) => !p.folded);
+    const activePlayers = myPlayers;
     const missing = activePlayers.filter((p) => choices.get(p.id) === null);
     if (missing.length > 0) {
       error = `${missing.map((p) => p.name).join(', ')} have not chosen yet.`;
@@ -44,7 +52,6 @@
       }
     }
     error = '';
-    revealed = true;
     doSubmitBetChoices(choices);
   }
 
@@ -132,48 +139,50 @@
     {/if}
 
   {:else}
-    <!-- ── Standalone: all players choose then reveal at once ─────────────── -->
+    <!-- ── Standalone: our seats choose, then reveal at once ──────────────── -->
     {@const enforce = !!$gameState?.enforceTimeLimit}
-    {#if !revealed}
-      {#each hlPlayers as player}
-        {#if !player.folded}
-          {@const allowLow   = !enforce || player.lowEquation  !== null}
-          {@const allowHigh  = !enforce || player.highEquation !== null}
-          {@const allowSwing = !enforce || (allowLow && allowHigh)}
-          <fieldset>
-            <legend>{player.name}</legend>
-            <label>
-              <input type="radio" name="choice-{player.id}" value="low"
-                checked={choices.get(player.id) === 'low'}
-                disabled={!allowLow}
-                onchange={() => setChoice(player.id, 'low')} />
-              Low (target: 1){!allowLow ? ' — no equation submitted' : ''}
-            </label>
-            <label>
-              <input type="radio" name="choice-{player.id}" value="high"
-                checked={choices.get(player.id) === 'high'}
-                disabled={!allowHigh}
-                onchange={() => setChoice(player.id, 'high')} />
-              High (target: 20){!allowHigh ? ' — no equation submitted' : ''}
-            </label>
-            <label>
-              <input type="radio" name="choice-{player.id}" value="swing"
-                checked={choices.get(player.id) === 'swing'}
-                disabled={!allowSwing}
-                onchange={() => setChoice(player.id, 'swing')} />
-              Swing (both — must win both pots){!allowSwing ? ' — requires both equations' : ''}
-            </label>
-          </fieldset>
-        {/if}
+    {#if myPlayers.length === 0}
+      <p><em>You folded — waiting for the other players to submit their choices…</em></p>
+    {:else if !submitted}
+      {#each myPlayers as player}
+        {@const allowLow   = !enforce || player.lowEquation  !== null}
+        {@const allowHigh  = !enforce || player.highEquation !== null}
+        {@const allowSwing = !enforce || (allowLow && allowHigh)}
+        <fieldset>
+          <legend>{player.name}</legend>
+          <label>
+            <input type="radio" name="choice-{player.id}" value="low"
+              checked={choices.get(player.id) === 'low'}
+              disabled={!allowLow}
+              onchange={() => setChoice(player.id, 'low')} />
+            Low (target: 1){!allowLow ? ' — no equation submitted' : ''}
+          </label>
+          <label>
+            <input type="radio" name="choice-{player.id}" value="high"
+              checked={choices.get(player.id) === 'high'}
+              disabled={!allowHigh}
+              onchange={() => setChoice(player.id, 'high')} />
+            High (target: 20){!allowHigh ? ' — no equation submitted' : ''}
+          </label>
+          <label>
+            <input type="radio" name="choice-{player.id}" value="swing"
+              checked={choices.get(player.id) === 'swing'}
+              disabled={!allowSwing}
+              onchange={() => setChoice(player.id, 'swing')} />
+            Swing (both — must win both pots){!allowSwing ? ' — requires both equations' : ''}
+          </label>
+        </fieldset>
       {/each}
 
       {#if error}
         <p role="alert">{error}</p>
       {/if}
 
-      <button type="button" onclick={revealAll}>Reveal all choices</button>
+      <button type="button" onclick={revealAll}>
+        {myPlayers.length > 1 ? 'Reveal all choices' : 'Submit choice'}
+      </button>
     {:else}
-      <p><em>Choices revealed — see Results below.</em></p>
+      <p><em>Waiting for the other players to choose…</em></p>
     {/if}
   {/if}
 </section>

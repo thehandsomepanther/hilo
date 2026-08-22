@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onDestroy } from 'svelte';
-  import { gameState, submitEquation, unsubmitEquation, doAdvanceToBetting2, expireCalculationPhase, setPlayerReady, localPlayerId, networkMode } from '../gameStore';
+  import { gameState, submitEquation, unsubmitEquation, doAdvanceToBetting2, expireCalculationPhase, setPlayerReady, controlsSeat, networkMode } from '../gameStore';
   import type { Card, DealtPlayer } from '../gameStore';
 
   // ─── Token helpers ────────────────────────────────────────────────────────
@@ -127,7 +127,7 @@
       // Auto-submit any filled-but-not-yet-submitted equations before expiry.
       for (const player of calcPlayers) {
         if (player.folded) continue;
-        if ($localPlayerId && player.id !== $localPlayerId) continue;
+        if (!$controlsSeat(player.id)) continue;
         for (const target of ['low', 'high'] as const) {
           const alreadySubmitted = target === 'low' ? player.lowEquation !== null : player.highEquation !== null;
           if (alreadySubmitted) continue;
@@ -138,7 +138,7 @@
       // Auto-ready any player who has both equations (enforcement bypasses the manual ready step).
       for (const player of calcPlayers) {
         if (player.folded) continue;
-        if ($localPlayerId && player.id !== $localPlayerId) continue;
+        if (!$controlsSeat(player.id)) continue;
         if (player.lowEquation !== null && player.highEquation !== null) setPlayerReady(player.id);
       }
       if ($networkMode !== 'peer') expireCalculationPhase();
@@ -159,11 +159,11 @@
 
   {#each calcPlayers as player}
     {#if !player.folded}
-      {@const isMe = !$localPlayerId || player.id === $localPlayerId}
+      {@const mine = $controlsSeat(player.id)}
       {@const tokens = getTokens(player)}
       {@const ps = playerStates[player.id]}
 
-      {#if isMe}
+      {#if mine}
         <fieldset style="max-width: 100vw; box-sizing: border-box;">
           <legend>{player.name}</legend>
 
@@ -244,7 +244,9 @@
           {/if}
         </fieldset>
       {:else}
-        <!-- Read-only status for other players — equations hidden until results -->
+        <!-- Read-only status for seats we don't control (other players, and
+             bots in a standalone game) — cards and equations stay hidden
+             until results. -->
         <fieldset>
           <legend>{player.name}</legend>
           <p>

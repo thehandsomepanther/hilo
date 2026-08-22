@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { gameState, doBettingAction, localPlayerId } from '../gameStore';
+  import { gameState, doBettingAction, controlsSeat } from '../gameStore';
 
   let raiseAmount = $state(0);
 
@@ -47,7 +47,7 @@
   {/if}
 
   {#if activePlayer}
-    {@const isMyTurn = !$localPlayerId || activePlayer.id === $localPlayerId}
+    {@const isMyTurn = $controlsSeat(activePlayer.id)}
     <fieldset>
       <legend>
         {activePlayer.name}'s turn

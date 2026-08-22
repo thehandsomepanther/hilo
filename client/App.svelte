@@ -3,7 +3,7 @@
   import { get } from 'svelte/store';
   import {
     gameState, pendingDecision, isDealing, resolveDecision, networkMode, localPlayerId,
-    seatOnline, hostLinkUp, queuedActionCount,
+    seatOnline, hostLinkUp, queuedActionCount, controlsSeat,
   } from './gameStore';
   import type { DealtPlayer, Card } from './gameStore';
   import Setup from './components/Setup.svelte';
@@ -89,7 +89,7 @@
 {:else}
   <!-- ── × Card Decision overlay (appears during async dealing) ───────────── -->
   {#if $pendingDecision}
-    {@const isMyDecision = !$localPlayerId || $pendingDecision.player.id === $localPlayerId}
+    {@const isMyDecision = $controlsSeat($pendingDecision.player.id)}
     <section aria-live="assertive">
       <h2>Multiplication Card Decision</h2>
       {#if isMyDecision}
@@ -177,8 +177,9 @@
             {@const isMe = player.id === $localPlayerId}
             {@const online = $seatOnline[i] ?? true}
             {@const isActive = player.id === activePlayerId && (phase === 'betting-1' || phase === 'betting-2')}
-            {@const showSecret = !$localPlayerId || isMe || (phase === 'results' && !player.folded)}
-            {@const showEquations = !$localPlayerId || isMe || phase === 'results'}
+            {@const mine = $controlsSeat(player.id)}
+            {@const showSecret = mine || (phase === 'results' && !player.folded)}
+            {@const showEquations = mine || phase === 'results'}
             {@const dealt = 'secretCard' in player && player.secretCard !== null ? player as DealtPlayer : null}
             <tr style={(isMe || isActive) ? 'background-color: #fffbcc; font-weight: bold;' : ''}>
               <td>
@@ -201,7 +202,7 @@
               <td>{player.personalOperators.length ? player.personalOperators.map((op) => op.operator).join('  ') : '—'}</td>
               <td>
                 {#if dealt && dealt.betChoice !== null}
-                  {(!$localPlayerId || isMe || phase === 'results' || phase === 'game-over')
+                  {(mine || phase === 'results' || phase === 'game-over')
                     ? dealt.betChoice
                     : '(hidden)'}
                 {:else}
