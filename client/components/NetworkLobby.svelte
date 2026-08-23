@@ -6,11 +6,12 @@
     DEFAULT_BOT_DIFFICULTY,
   } from '../gameStore';
   import { online } from '../online';
+  import LanSetup from './LanSetup.svelte';
 
   type Props = { oncomplete: () => void };
   const { oncomplete }: Props = $props();
 
-  type Mode = 'choose' | 'host' | 'peer';
+  type Mode = 'choose' | 'host' | 'peer' | 'lan';
   let mode = $state<Mode>('choose');
 
   let workerUrl = $state(localStorage.getItem('workerUrl') ?? '');
@@ -192,6 +193,12 @@
     {#snippet localChoices()}
       <button type="button" onclick={playSolo}>Play solo vs bots</button>
       <button type="button" onclick={oncomplete}>Pass and play on this device</button>
+      <!--
+        Grouped with the local options because the axis that matters here is
+        "needs the internet or not": this one connects devices directly over the
+        LAN, so it works on a hotspot with no upstream.
+      -->
+      <button type="button" onclick={() => { mode = 'lan'; }}>Play over local wifi (QR)</button>
     {/snippet}
 
     {#if !$online}
@@ -236,6 +243,9 @@
       <br />
       {@render networkChoices()}
     {/if}
+
+  {:else if mode === 'lan'}
+    <LanSetup {oncomplete} onback={() => { mode = 'choose'; }} />
 
   {:else if mode === 'host'}
     <h3>Hosting</h3>

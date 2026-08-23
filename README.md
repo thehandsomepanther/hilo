@@ -13,9 +13,19 @@ Add to Home Screen). Once installed it runs with no connection at all: the whole
 app is cached on first visit, and **Play solo vs bots** and **Pass and play on
 this device** both work entirely offline.
 
-Hosting and joining still need a connection — that's how players find each
-other — so the lobby leads with the local options when you're offline. Note that
-a game in progress currently lives only in memory: closing the app loses it.
+Hosting and joining over the internet still need a connection — that's how
+players find each other — so the lobby leads with the local options when you're
+offline. Note that a game in progress currently lives only in memory: closing
+the app loses it.
+
+**Play over local wifi (QR)** connects two or more devices on the same network
+with no internet at all — a hotspot, a plane, a hotel with a captive portal.
+With no signalling server to introduce them, the devices do it by camera: the
+host shows a QR code, the player scans it and shows one back, and the host scans
+that. One exchange per player. Both devices need a camera, and the page must be
+served over HTTPS for the camera to work. Because there's no signalling channel
+afterwards, a reload means redoing the scan — the seat and chips survive, but
+the connection has to be rebuilt.
 
 ---
 

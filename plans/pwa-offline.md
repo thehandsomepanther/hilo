@@ -241,8 +241,9 @@ this mode so gathering doesn't stall on unreachable STUN. Costs, worst first:
   (jsQR, ~50 KB, precached).
 - O(n−1) scan pairs — fine at two players, tedious at four.
 
-About a day's work. Not part of the PWA phases above; it is a separate feature
-that happens to share the offline motivation.
+Not part of the PWA phases above; it is a separate feature that happens to share
+the offline motivation. Costed out properly — with measured SDP sizes and the
+mDNS problem it turns on — in [lan-qr-multiplayer.md](lan-qr-multiplayer.md).
 
 ## Known gotchas
 
